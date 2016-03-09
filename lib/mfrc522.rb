@@ -182,11 +182,11 @@ class Mfrc522
     (read_spi(RFCfgReg) & 0x70) >> 4
   end
 
-  def calculate_crc(send_data)
+  def calculate_crc(data)
     write_spi(CommandReg, PCD_Idle)               # Stop any active command.
     write_spi(DivIrqReg, 0x04)                    # Clear the CRCIRq interrupt request bit
     write_spi_set_bitmask(FIFOLevelReg, 0x80)     # FlushBuffer = 1, FIFO initialization
-    write_spi(FIFODataReg, send_data)             # Write data to the FIFO
+    write_spi(FIFODataReg, data)                  # Write data to the FIFO
     write_spi(CommandReg, PCD_CalcCRC)            # Start the calculation
 
     # Wait for the command to complete
@@ -207,7 +207,23 @@ class Mfrc522
     return :status_ok, result
   end
 
-  def communicate_with_picc(command, send_data, framing_bit = 0)
+  def append_crc(data)
+    status, crc = calculate_crc(data)
+    return status if status != :status_ok
+    data << crc[0] << crc[1]
+
+    return :status_ok, data
+  end
+
+  def check_crc(data)
+    status, crc = calculate_crc(data[0..-3])
+    return status if status != :status_ok
+    return :status_crc_error if data[-2] != crc[0] || data[-1] != crc[1]
+
+    return :status_ok
+  end
+
+  def communicate_with_picc(command, send_data, framing_bit = 0, check_crc = false)
     status = :status_ok
     wait_irq = 0x00
     wait_irq = 0x10 if command == PCD_MFAuthent
@@ -248,11 +264,22 @@ class Mfrc522
     end
     valid_bits = read_spi(ControlReg) & 0x07
 
+    # Check CRC if requested
+    if !received_data.empty? && check_crc
+      return :status_mifare_nack if received_data.count == 1 && valid_bits == 4
+      return :status_crc_error if received_data.count < 2 || valid_bits != 0
+
+      status = check_crc(received_data)
+      return status if status != :status_ok
+    end
+
     return status, received_data, valid_bits
   end
 
   # Wakes PICC from HALT or IDLE to ACTIVE state
-  def picc_request(picc_command) # Accept PICC_REQA and PICC_WUPA command
+  #
+  # Accept PICC_REQA and PICC_WUPA command
+  def picc_request(picc_command)
     write_spi_clear_bitmask(CollReg, 0x80)  # ValuesAfterColl=1 => Bits received after collision are cleared.
 
     status, _received_data, valid_bits = communicate_with_picc(PCD_Transceive, picc_command, 0x07)
@@ -268,9 +295,8 @@ class Mfrc522
     buffer = [PICC_HLTA, 0]
 
     # Calculate CRC and append it into buffer
-    status, result = calculate_crc(buffer)
+    status, buffer = append_crc(buffer)
     return status if status != :status_ok
-    buffer << result[0] << result[1]
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_Transceive, buffer)
 
@@ -323,9 +349,8 @@ class Mfrc522
           buffer << (buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]) # Block Check Character
 
           # Append CRC to buffer
-          status, crc = calculate_crc(buffer)
+          status, buffer = append_crc(buffer)
           return status if status != :status_ok
-          buffer << crc[0] << crc[1]
         else
           tx_last_bits = current_level_known_bits % 8
           uid_full_byte = current_level_known_bits / 8
@@ -374,9 +399,8 @@ class Mfrc522
       # Check the result of full select
       return :status_sak_error if received_data.count != 3 || valid_bits != 0 # Select Acknowledge is 1 byte + CRC_A
 
-      status, crc = calculate_crc(received_data)
+      status = check_crc(received_data)
       return status if status != :status_ok
-      return :status_crc_error if received_data[1] != crc[0] || received_data[2] != crc[1]
 
       sak = received_data[0]
 
@@ -386,21 +410,50 @@ class Mfrc522
     return :status_ok, uid, sak
   end
 
+  #
   # PICC must be selected before calling for authenticate
-  # You must deauthenticate after communication, or no new communication can be made
-  def mifare_authenticate(uid)
+  # Remember to deauthenticate after communication, or no new communication can be made
+  #
+  # Accept PICC_MF_AUTH_KEY_A or PICC_MF_AUTH_KEY_B command
+  # Checks datasheets for block address numbering of your PICC
+  #
+  def mifare_authenticate(command, block_addr, sector_key, uid)
+    #
+    # Buffer[12]: {command, block_addr, sector_key[6], uid[4]}
+    #
+    buffer = [command, block_addr]
+    buffer += sector_key[0..5]
+    buffer += uid[0..3]
 
+    status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
+
+    return status if status != :status_ok
+    return :status_auth_failed if (read_spi(Status2Reg) & 0x08) == 0
+
+    return :status_ok
   end
 
   def mifare_deauthenticate
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  def mifare_read
+  def mifare_transceive(send_data)
 
   end
 
-  def mifare_write
+  def mifare_read(block_addr)
+    buffer = [PICC_MF_READ, block_addr]
+
+    status, buffer = append_crc(buffer)
+    return status if status != :status_ok
+
+    status, received_data, _valid_bits = communicate_with_picc(PCD_Transceive, buffer, 0, true)
+    return status if status != :status_ok
+
+    return :status_ok, received_data
+  end
+
+  def mifare_write(block_addr, send_data)
 
   end
 
@@ -408,4 +461,3 @@ class Mfrc522
 
   end
 end
-
