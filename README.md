@@ -6,7 +6,7 @@ This is a Ruby port of [miguelbalboa/rfid](https://github.com/miguelbalboa/rfid)
 You can install it by doing `gem install mfrc522`.
 
 ##Documentation
-RDoc is available at [RubyDoc](http://www.rubydoc.info/atitan/MFRC522_Ruby/master/Mfrc522).
+RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master/Mfrc522).
 
 ##Get started
 Simple demo code
