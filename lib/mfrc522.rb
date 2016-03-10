@@ -25,6 +25,8 @@ class Mfrc522
   # The commands used for MIFARE Ultralight (from http://www.nxp.com/documents/data_sheet/MF0ICU1.pdf, Section 8.6)
   # The PICC_MF_READ and PICC_MF_WRITE can also be used for MIFARE Ultralight.
   PICC_UL_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
+  #
+  PICC_MF_ACK         = 0xA   # Mifare Acknowledge
 
   # PCD commands
   PCD_Idle          = 0x00  # no action, cancels current command execution
@@ -224,7 +226,6 @@ class Mfrc522
   end
 
   def communicate_with_picc(command, send_data, framing_bit = 0, check_crc = false)
-    status = :status_ok
     wait_irq = 0x00
     wait_irq = 0x10 if command == PCD_MFAuthent
     wait_irq = 0x30 if command == PCD_Transceive
@@ -252,7 +253,6 @@ class Mfrc522
     # Check for error
     error = read_spi(ErrorReg)
     return :status_error if (error & 0x13) != 0 # BufferOvfl ParityErr ProtocolErr
-    status = :status_collision if (error & 0x08) != 0 # CollErr
 
     # Receiving data
     received_data = []
@@ -272,6 +272,9 @@ class Mfrc522
       status = check_crc(received_data)
       return status if status != :status_ok
     end
+
+    status = :status_ok
+    status = :status_collision if (error & 0x08) != 0 # CollErr
 
     return status, received_data, valid_bits
   end
@@ -410,8 +413,35 @@ class Mfrc522
     return :status_ok, uid, sak
   end
 
+  def picc_type(sak)
+    sak &= 0x7F
+
+    case sak
+    when 0x04
+      'PICC_TYPE_NOT_COMPLETE'
+    when 0x09
+      'PICC_TYPE_MIFARE_MINI'
+    when 0x08
+      'PICC_TYPE_MIFARE_1K'
+    when 0x18
+      'PICC_TYPE_MIFARE_4K'
+    when 0x00
+      'PICC_TYPE_MIFARE_UL'
+    when 0x10, 0x11
+      'PICC_TYPE_MIFARE_PLUS'
+    when 0x01
+      'PICC_TYPE_TNP3XXX'
+    when 0x20
+      'PICC_TYPE_ISO_14443_4'
+    when 0x40
+      'PICC_TYPE_ISO_18092'
+    else
+      'PICC_TYPE_UNKNOWN'
+    end
+  end
+
   #
-  # PICC must be selected before calling for authenticate
+  # PICC must be selected before calling for authentication
   # Remember to deauthenticate after communication, or no new communication can be made
   #
   # Accept PICC_MF_AUTH_KEY_A or PICC_MF_AUTH_KEY_B command
@@ -437,8 +467,22 @@ class Mfrc522
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  def mifare_transceive(send_data)
+  # Helper that append crc to buffer and check mifare acknowledge
+  def mifare_transceive(send_data, accept_timeout = false)
+    # Append CRC
+    status, send_data = append_crc(send_data)
+    return status if status != :status_ok
 
+    # Transfer data
+    status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, send_data)
+    return :status_ok if status == :status_picc_timeout && accept_timeout
+    return status if status != :status_ok
+
+    # Check mifare acknowledge
+    return :status_error if received_data.count != 1 || valid_bits != 4 # ACK is 4 bits long
+    return :status_mifare_nack if received_data[0] != PICC_MF_ACK
+
+    return :status_ok
   end
 
   def mifare_read(block_addr)
@@ -454,10 +498,116 @@ class Mfrc522
   end
 
   def mifare_write(block_addr, send_data)
+    buffer = [PICC_MF_WRITE, block_addr]
 
+    # Ask PICC if we can write to block_addr
+    status = mifare_transceive(buffer)
+    return status if status != :status_ok
+
+    # Then start transfer our data
+    status = mifare_transceive(send_data)
+    return status if status != :status_ok
+
+    return :status_ok
   end
 
-  def mifare_ultralight_write
+  def mifare_ultralight_write(page, send_data)
+    # Page 2-15, each 4 bytes
+    buffer = [PICC_UL_WRITE, page]
+    buffer += send_data[0..3]
 
+    status = mifare_transceive(buffer)
+    return status if status != :status_ok
+
+    return :status_ok
+  end
+
+  # Helper for reading value block
+  def mifare_get_value(block_addr)
+    status, received_data = mifare_read(block_addr)
+    return status if status != :status_ok
+  
+    value = (received_data[3] << 24) + (received_data[2] << 16) + (received_data[1] << 8) + received_data[0]
+  
+    return :status_ok, value
+  end
+
+  # Helper for writing value block
+  def mifare_set_value(block_addr, value)
+    # Value block format
+    #
+    # byte 0..3:   32 bit value in little endian
+    # byte 4..7:   copy of byte 0..3, with inverted bits (aka. XOR 255)
+    # byte 8..11:  copy of byte 0..3
+    # byte 12:     index of backup block (can be any value)
+    # byte 13:     copy of byte 12 with inverted bits (aka. XOR 255)
+    # byte 14:     copy of byte 12
+    # byte 15:     copy of byte 13
+
+    buffer[0]  = value & 0xFF
+    buffer[1]  = (value >> 8) & 0xFF
+    buffer[2]  = (value >> 16) & 0xFF
+    buffer[3]  = (value >> 24) & 0xFF
+    buffer[4]  = ~buffer[0]
+    buffer[5]  = ~buffer[1]
+    buffer[6]  = ~buffer[2]
+    buffer[7]  = ~buffer[3]
+    buffer[8]  = buffer[0]
+    buffer[9]  = buffer[1]
+    buffer[10] = buffer[2]
+    buffer[11] = buffer[3]
+    buffer[12] = block_addr
+    buffer[13] = ~block_addr
+    buffer[14] = buffer[12]
+    buffer[15] = buffer[13]
+  
+    mifare_write(blockAddr, buffer)
+  end
+
+  # Helper for increment, decrement, and restore command
+  def mifare_two_step(command, block_addr, value)
+    buffer = [command, block_addr]
+    send_data = [ # Split integer into array of bytes
+      value & 0xFF,
+      (value >> 8) & 0xFF,
+      (value >> 16) & 0xFF,
+      (value >> 24) & 0xFF
+    ]
+    
+    # Ask PICC if we can write to block_addr
+    status = mifare_transceive(buffer)
+    return status if status != :status_ok
+
+    # Then start transfer our data
+    status = mifare_transceive(send_data, true) # Accept timeout
+    return status if status != :status_ok
+
+    return :status_ok
+  end
+
+  # MIFARE Classic only
+  def mifare_increment(block_addr, delta)
+    mifare_two_step(PICC_MF_INCREMENT, block_addr, delta)
+  end
+
+  # MIFARE Classic only
+  def mifare_decrement(block_addr, delta)
+    mifare_two_step(PICC_MF_DECREMENT, block_addr, delta)
+  end
+
+  # MIFARE Classic only
+  def mifare_restore(block_addr)
+    mifare_two_step(PICC_MF_RESTORE, block_addr, 0)
+  end
+
+  # MIFARE Classic only
+  def mifare_transfer(block_addr)
+    buffer = [PICC_MF_TRANSFER, block_addr]
+
+    status = mifare_transceive(buffer)
+    return status if status != :status_ok
+
+    return :status_ok
   end
 end
+
