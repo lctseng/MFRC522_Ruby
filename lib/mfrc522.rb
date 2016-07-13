@@ -1,4 +1,7 @@
 require 'pi_piper'
+require 'openssl'
+require 'securerandom'
+
 include PiPiper
 
 class Mfrc522
@@ -25,8 +28,10 @@ class Mfrc522
   # The commands used for MIFARE Ultralight (from http://www.nxp.com/documents/data_sheet/MF0ICU1.pdf, Section 8.6)
   # The PICC_MF_READ and PICC_MF_WRITE can also be used for MIFARE Ultralight.
   PICC_UL_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
+  # The commands here is for 3DES Authentication
+  PICC_MF_3DES_AUTH   = 0x1A
   #
-  PICC_MF_ACK         = 0xA   # Mifare Acknowledge
+  PICC_MF_ACK         = 0x0A   # Mifare Acknowledge
 
   # PCD commands
   PCD_Idle          = 0x00  # no action, cancels current command execution
@@ -98,6 +103,7 @@ class Mfrc522
   TestDAC2Reg       = 0x3A  # defines the test value for TestDAC2
   TestADCReg        = 0x3B  # shows the value of ADC I and Q channels
 
+  # Constructor
   def initialize(nrstpd = 24, chip = 0, spd = 8000000, timer = 50)
     chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
                     1 => PiPiper::Spi::CHIP_SELECT_1,
@@ -124,11 +130,13 @@ class Mfrc522
     antenna_on # Turn antenna on. They were disabled by the reset.
   end
 
+  # MFRC522 software reset
   def soft_reset
     write_spi(CommandReg, PCD_SoftReset)
     sleep 1.0 / 20.0 # wait 50ms
   end
 
+  # Read from SPI communication
   def read_spi(reg)
     output = 0
     PiPiper::Spi.begin do |spi|
@@ -144,6 +152,7 @@ class Mfrc522
     output
   end
 
+  # Write to SPI communication
   def write_spi(reg, values)
     PiPiper::Spi.begin do |spi|
       spi.chip_select_active_low(true)
@@ -156,25 +165,30 @@ class Mfrc522
     end
   end
 
+  # Helper for setting bits by mask
   def write_spi_set_bitmask(reg, mask)
     value = read_spi(reg)
     write_spi(reg, value | mask)
   end
 
+  # Helper for clearing bits by mask
   def write_spi_clear_bitmask(reg, mask)
     value = read_spi(reg)
     write_spi(reg, value & (~mask))
   end
 
+  # Turn antenna on
   def antenna_on
     value = read_spi(TxControlReg)
     write_spi_set_bitmask(TxControlReg, 0x03) if (value & 0x03) != 0x03
   end
 
+  # Turn antenna off
   def antenna_off
     write_spi_clear_bitmask(TxControlReg, 0x03)
   end
 
+  # Modify and show antenna gain level
   # level = 1: 18dB, 2: 23dB, 3: 33dB, 4: 38dB, 5: 43dB, 6: 48dB
   def antenna_gain(level = nil)
     unless level.nil?
@@ -184,6 +198,7 @@ class Mfrc522
     (read_spi(RFCfgReg) & 0x70) >> 4
   end
 
+  # Calculate CRC using MFRC522's built-in coprocessor
   def calculate_crc(data)
     write_spi(CommandReg, PCD_Idle)               # Stop any active command.
     write_spi(DivIrqReg, 0x04)                    # Clear the CRCIRq interrupt request bit
@@ -209,6 +224,7 @@ class Mfrc522
     return :status_ok, result
   end
 
+  # Calculate and append CRC to data
   def append_crc(data)
     status, crc = calculate_crc(data)
     return status if status != :status_ok
@@ -217,6 +233,7 @@ class Mfrc522
     return :status_ok, data
   end
 
+  # Check CRC using MFRC522's built-in coprocessor
   def check_crc(data)
     status, crc = calculate_crc(data[0..-3])
     return status if status != :status_ok
@@ -225,6 +242,7 @@ class Mfrc522
     return :status_ok
   end
 
+  # PICC transceive helper
   def communicate_with_picc(command, send_data, framing_bit = 0, check_crc = false)
     wait_irq = 0x00
     wait_irq = 0x10 if command == PCD_MFAuthent
@@ -288,7 +306,7 @@ class Mfrc522
     status, _received_data, valid_bits = communicate_with_picc(PCD_Transceive, picc_command, 0x07)
 
     return status if status != :status_ok
-    return :status_error if valid_bits != 0 # REQA or WUPA command return 16 bits(full byte)
+    return :status_unknown_data if valid_bits != 0 # REQA or WUPA command return 16 bits(full byte)
 
     return :status_ok
   end
@@ -311,6 +329,8 @@ class Mfrc522
     return status
   end
 
+  # Select PICC for further communication
+  #
   # PICC must be in state ACTIVE
   def picc_select
     #  Description of buffer structure:
@@ -413,6 +433,37 @@ class Mfrc522
     return :status_ok, uid, sak
   end
 
+  # Lookup error message
+  def error_type(error)
+    case error
+    when :status_ok
+      'It worked'
+    when :status_pcd_timeout
+      'Reader did not responding'
+    when :status_picc_timeout
+      'Tag did not responding'
+    when :status_crc_error
+      'CRC check failed'
+    when :status_mifare_nack
+      'Tag sent negative acknowledge'
+    when :status_collision
+      'Multiple tags detected'
+    when :status_unknown_data
+      'Incorrect data received'
+    when :status_internal_error
+      'Something went wrong but it shouldnt happen'
+    when :status_sak_error
+      'Incorrect select acknowledge'
+    when :status_auth_failed
+      'Authentication failed'
+    when :status_error
+      'Something went wrong'
+    else
+      'Unknown error type'
+    end
+  end
+
+  # Lookup PICC name using sak
   def picc_type(sak)
     sak &= 0x7F
 
@@ -440,6 +491,7 @@ class Mfrc522
     end
   end
 
+  # Start encrypted Crypto1 communication between reader and Mifare PICC
   #
   # PICC must be selected before calling for authentication
   # Remember to deauthenticate after communication, or no new communication can be made
@@ -447,13 +499,13 @@ class Mfrc522
   # Accept PICC_MF_AUTH_KEY_A or PICC_MF_AUTH_KEY_B command
   # Checks datasheets for block address numbering of your PICC
   #
-  def mifare_authenticate(command, block_addr, sector_key, uid)
+  def mifare_crypto1_authenticate(command, block_addr, sector_key, uid)
     #
     # Buffer[12]: {command, block_addr, sector_key[6], uid[4]}
     #
     buffer = [command, block_addr]
     buffer += sector_key[0..5]
-    buffer += uid[0..3]
+    buffer += uid
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
 
@@ -463,11 +515,60 @@ class Mfrc522
     return :status_ok
   end
 
-  def mifare_deauthenticate
+  # Stop Mifare encrypted communication
+  def mifare_crypto1_deauthenticate
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  # Helper that append crc to buffer and check mifare acknowledge
+  def mifare_3des_authenticate(des_key)
+    # Cipher
+    cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
+    cipher.key = [des_key*2].pack('H*')
+    cipher.padding = 0
+
+    # Ask for authentication
+    buffer = [PICC_MF_3DES_AUTH, 0x00]
+    status, received_data = mifare_transceive(buffer)
+    return status if status != :status_ok
+    return :status_unknown_data if received_data[0] != 0xAF
+
+    # Use received data as IV for next transmission
+    next_iv = received_data[1..8]
+
+    # Decrypt challenge random number and rotate it by 8 bits
+    cipher.decrypt
+    cipher.iv = "\x00"*16
+    challenge = received_data[1..8].pack('C*')
+    challenge = cipher.update(challenge) + cipher.final
+    challenge.rotate!
+
+    # Generate 8 bytes random number and encrypt the response 
+    random_number = SecureRandom.random_bytes(8)
+    cipher.encrypt
+    cipher.iv = next_iv
+    response = cipher.update(challenge.pack('C*') + random_number) + cipher.final
+
+    # Receive verification
+    buffer = [0xAF, [response].unpack('H*')]
+    status, received_data = mifare_transceive(buffer)
+    return status if status != :status_ok
+    return :status_unknown_data if received_data[0] != 0x00
+
+    # Check if verification matches random_number rotated by 8 bits
+    cipher.decrypt
+    cipher.iv = [response[-16..-1]].pack('H*')
+    verification = received_data[1..8].pack('C*')
+    verification = cipher.update(verification) + cipher.final
+
+    if random_number.bytes.rotate! != verification
+      picc_halt
+      return :status_auth_failed
+    end
+
+    return :status_ok
+  end
+
+  # Helper that append CRC to buffer and check CRC or Mifare acknowledge
   def mifare_transceive(send_data, accept_timeout = false)
     # Append CRC
     status, send_data = append_crc(send_data)
@@ -478,25 +579,32 @@ class Mfrc522
     return :status_ok if status == :status_picc_timeout && accept_timeout
     return status if status != :status_ok
 
-    # Check mifare acknowledge
-    return :status_error if received_data.count != 1 || valid_bits != 4 # ACK is 4 bits long
+    # Data exists, check CRC and return
+    if received_data.size > 1
+      return :status_crc_error if received_data.count < 2 || valid_bits != 0
+
+      status = check_crc(received_data)
+      return status, received_data
+    end
+
+    # Data doesn't exist, check mifare acknowledge
+    return :status_error if received_data.size != 1 || valid_bits != 4 # ACK is 4 bits long
     return :status_mifare_nack if received_data[0] != PICC_MF_ACK
 
     return :status_ok
   end
 
+  # Read Mifare block address
   def mifare_read(block_addr)
     buffer = [PICC_MF_READ, block_addr]
 
-    status, buffer = append_crc(buffer)
-    return status if status != :status_ok
-
-    status, received_data, _valid_bits = communicate_with_picc(PCD_Transceive, buffer, 0, true)
+    status, received_data = mifare_transceive(buffer)
     return status if status != :status_ok
 
     return :status_ok, received_data
   end
 
+  # Write Mifare block address
   def mifare_write(block_addr, send_data)
     buffer = [PICC_MF_WRITE, block_addr]
 
@@ -511,6 +619,7 @@ class Mfrc522
     return :status_ok
   end
 
+  # Write helper for Mifare UL
   def mifare_ultralight_write(page, send_data)
     # Page 2-15, each 4 bytes
     buffer = [PICC_UL_WRITE, page]
@@ -543,7 +652,7 @@ class Mfrc522
     # byte 13:     copy of byte 12 with inverted bits (aka. XOR 255)
     # byte 14:     copy of byte 12
     # byte 15:     copy of byte 13
-
+    buffer = []
     buffer[0]  = value & 0xFF
     buffer[1]  = (value >> 8) & 0xFF
     buffer[2]  = (value >> 16) & 0xFF
@@ -561,7 +670,7 @@ class Mfrc522
     buffer[14] = buffer[12]
     buffer[15] = buffer[13]
   
-    mifare_write(blockAddr, buffer)
+    mifare_write(block_addr, buffer)
   end
 
   # Helper for increment, decrement, and restore command
@@ -585,21 +694,25 @@ class Mfrc522
     return :status_ok
   end
 
+  # Mifare increment helper
   # MIFARE Classic only
   def mifare_increment(block_addr, delta)
     mifare_two_step(PICC_MF_INCREMENT, block_addr, delta)
   end
 
+  # Mifare decrement helper
   # MIFARE Classic only
   def mifare_decrement(block_addr, delta)
     mifare_two_step(PICC_MF_DECREMENT, block_addr, delta)
   end
 
+  # Mifare restore helper
   # MIFARE Classic only
   def mifare_restore(block_addr)
     mifare_two_step(PICC_MF_RESTORE, block_addr, 0)
   end
 
+  # Mifare transfer helper
   # MIFARE Classic only
   def mifare_transfer(block_addr)
     buffer = [PICC_MF_TRANSFER, block_addr]

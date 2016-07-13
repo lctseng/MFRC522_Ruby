@@ -11,8 +11,15 @@ RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Rub
 ##Get started
 Simple demo code
 ```ruby
+require 'mfrc522'
+
 # NRSTPD(or RST) is the pin to power up the chip.
 # Timer is the value of internal timer for timeout interrupt. 50 means 25ms.
+# SPD unit is in bps(hertz), 8000000 = 8Mbps = 8Mhz
+# chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
+#                 1 => PiPiper::Spi::CHIP_SELECT_1,
+#                 2 => PiPiper::Spi::CHIP_SELECT_BOTH,
+#                 3 => PiPiper::Spi::CHIP_SELECT_NONE }
 reader = Mfrc522.new(nrstpd = 24, chip = 0, spd = 8000000, timer = 50)
 
 # Wakes the PICC
@@ -25,10 +32,12 @@ status, uid, sak = reader.picc_select
 puts "PICC type is #{picc_type(sak)}"
 
 # Start encrypted communication
-status = reader.mifare_authenticate(Mrfc522::PICC_MF_AUTH_KEY_A, block_addr = 0x08, sector_key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], uid)
+sector_key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+block_addr = 0x08
+status = reader.mifare_authenticate(Mrfc522::PICC_MF_AUTH_KEY_A, block_addr, sector_key, uid)
 
 # Read something
-status, data = reader.mifare_read(block_addr = 0x08)
+status, data = reader.mifare_read(block_addr)
 
 # Stop encrypted communication
 reader.mifare_deauthenticate
