@@ -491,6 +491,11 @@ class Mfrc522
     end
   end
 
+  # Check if Mifare PICC
+  def mifare?(sak)
+    sak & 0x20 != 1
+  end
+
   # Start encrypted Crypto1 communication between reader and Mifare PICC
   #
   # PICC must be selected before calling for authentication
