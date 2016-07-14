@@ -542,7 +542,7 @@ class Mfrc522
 
     # Decrypt challenge random number and rotate it by 8 bits
     cipher.decrypt
-    cipher.iv = "\x00"*16
+    cipher.iv = "\x00"*8
     challenge = received_data[1..8].pack('C*')
     challenge = cipher.update(challenge) + cipher.final
     challenge.rotate!
