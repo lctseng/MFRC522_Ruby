@@ -10,8 +10,10 @@ RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Rub
 
 ##Project Status
 Author has confirmed that it works with Mifare Classic.
+
 3DES and AES authentication is not currently usable.
-`mifare_authenticate` and `mifare_deauthenticate` method name has changed.
+
+`mifare_authenticate` and `mifare_deauthenticate` method name has been renamed since gem release 0.1.0.
 
 ##Get started
 Simple demo code
@@ -34,7 +36,7 @@ status = reader.picc_request(Mfrc522::PICC_REQA)
 status, uid, sak = reader.picc_select
 
 # Check PICC type
-puts "PICC type is #{picc_type(sak)}"
+puts "PICC type is #{reader.picc_type(sak)}"
 
 # Auth for 0x08
 sector_key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
