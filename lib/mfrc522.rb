@@ -1,6 +1,4 @@
 require 'pi_piper'
-require 'openssl'
-require 'securerandom'
 
 include PiPiper
 
@@ -364,6 +362,8 @@ class Mfrc522
     for current_cascade_level in 0..2
       buffer = [select_level[current_cascade_level]]
       current_level_known_bits = 0
+      received_data = []
+      valid_bits = 0
 
       loop do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
@@ -388,7 +388,7 @@ class Mfrc522
         return status if status != :status_ok
 
         # Append received UID into buffer if not doing full select
-        buffer = buffer[0...all_full_byte] + received_data if current_level_known_bits < 32
+        buffer = buffer[0...all_full_byte] + received_data[0..3] if current_level_known_bits < 32
 
         # Handle collision
         if status == :status_collision
@@ -510,7 +510,7 @@ class Mfrc522
     #
     buffer = [command, block_addr]
     buffer += sector_key[0..5]
-    buffer += uid
+    buffer += uid[-4..-1]
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
 
@@ -526,6 +526,9 @@ class Mfrc522
   end
 
   def mifare_3des_authenticate(des_key)
+    require 'openssl'
+    require 'securerandom'
+
     # Cipher
     cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
     cipher.key = [des_key*2].pack('H*')
