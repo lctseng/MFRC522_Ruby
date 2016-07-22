@@ -368,7 +368,7 @@ class Mfrc522
       loop do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
           # ensure there's nothing weird in buffer
-          if buffer.size != 6 || !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
+          if buffer.size != 6 && !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
             current_level_known_bits = 0
             next
           end
