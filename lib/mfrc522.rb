@@ -367,6 +367,12 @@ class Mfrc522
 
       loop do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
+          # ensure there's nothing weird in buffer
+          if buffer.size != 6 || !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
+            current_level_known_bits = 0
+            next
+          end
+
           tx_last_bits = 0
           buffer[1] = 0x70 # NVB - We're sending full length byte[0..6]
           buffer << (buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]) # Block Check Character
