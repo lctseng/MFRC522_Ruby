@@ -177,8 +177,7 @@ class Mfrc522
 
   # Turn antenna on
   def antenna_on
-    value = read_spi(TxControlReg)
-    write_spi_set_bitmask(TxControlReg, 0x03) if (value & 0x03) != 0x03
+    write_spi_set_bitmask(TxControlReg, 0x03)
   end
 
   # Turn antenna off
@@ -370,6 +369,7 @@ class Mfrc522
           # ensure there's nothing weird in buffer
           if buffer.size != 6 && !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
             current_level_known_bits = 0
+            buffer = []
             next
           end
 
@@ -471,34 +471,54 @@ class Mfrc522
 
   # Lookup PICC name using sak
   def picc_type(sak)
-    sak &= 0x7F
-
-    case sak
-    when 0x04
-      'PICC_TYPE_NOT_COMPLETE'
-    when 0x09
-      'PICC_TYPE_MIFARE_MINI'
-    when 0x08
-      'PICC_TYPE_MIFARE_1K'
-    when 0x18
-      'PICC_TYPE_MIFARE_4K'
-    when 0x00
-      'PICC_TYPE_MIFARE_UL'
-    when 0x10, 0x11
-      'PICC_TYPE_MIFARE_PLUS'
-    when 0x01
-      'PICC_TYPE_TNP3XXX'
-    when 0x20
-      'PICC_TYPE_ISO_14443_4'
-    when 0x40
-      'PICC_TYPE_ISO_18092'
-    else
-      'PICC_TYPE_UNKNOWN'
+    # SAK coding separation reference:
+    # http://cache.nxp.com/documents/application_note/AN10833.pdf
+    # http://www.nxp.com/documents/application_note/130830.pdf
+    if sak & 0x04 != 0
+      return 'UID not complete'
     end
+
+    if sak & 0x02 != 0
+      return 'Reserved SAK'
+    end
+
+    if sak & 0x08 != 0
+      if sak & 0x10 != 0
+        return 'MIFARE 4K'
+      end
+
+      if sak & 0x01 != 0
+        return 'MIFARE Mini'
+      end
+      
+      return 'MIFARE 1K'
+    end
+
+    if sak & 0x10 != 0
+      if sak & 0x01 != 0
+        return 'MIFARE Plus 4K SL2'
+      end
+        
+      return 'MIFARE Plus 2K SL2'
+    end
+
+    if sak == 0x00
+      return 'MIFARE Ultralight'
+    end
+
+    if sak & 0x20 != 0
+      return 'ISO/IEC 14443-4'
+    end
+
+    if sak & 0x40 != 0
+      return 'ISO/IEC 18092'
+    end
+
+    'Unknown'
   end
 
   # Check if Mifare PICC
-  def mifare?(sak)
+  def mifare_protocol?(sak)
     sak & 0x20 != 1
   end
 
@@ -595,7 +615,7 @@ class Mfrc522
 
     # Data exists, check CRC and return
     if received_data.size > 1
-      return :status_crc_error if received_data.count < 2 || valid_bits != 0
+      return :status_crc_error if received_data.size < 3 || valid_bits != 0
 
       status = check_crc(received_data)
       return status, received_data
