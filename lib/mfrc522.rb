@@ -1,8 +1,14 @@
 require 'pi_piper'
 
+require 'mifare/classic'
+require 'mifare/ultralight'
+require 'mifare/ultralight_c'
+require 'mifare/plus'
+require 'mifare/des_fire'
+
 include PiPiper
 
-class Mfrc522
+class MFRC522
 
   # PICC commands used by the PCD to manage communication with several PICCs (ISO 14443-3, Type A, section 6.4)
   PICC_REQA           = 0x26  # REQuest command, Type A. Invites PICCs in state IDLE to go to READY and prepare for anticollision or selection. 7 bit frame.
@@ -128,7 +134,7 @@ class Mfrc522
     antenna_on # Turn antenna on. They were disabled by the reset.
   end
 
-  # MFRC522 software reset
+  # PCD software reset
   def soft_reset
     write_spi(CommandReg, PCD_SoftReset)
     sleep 1.0 / 20.0 # wait 50ms
@@ -462,6 +468,8 @@ class Mfrc522
       'Incorrect select acknowledge'
     when :status_auth_failed
       'Authentication failed'
+    when :status_data_length_error
+      'Incorrect input data'
     when :status_error
       'Something went wrong'
     else
@@ -536,7 +544,7 @@ class Mfrc522
     #
     buffer = [command, block_addr]
     buffer += sector_key[0..5]
-    buffer += uid[-4..-1]
+    buffer += uid[0..3]
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
 
@@ -574,27 +582,28 @@ class Mfrc522
     cipher.iv = "\x00"*8
     challenge = received_data[1..8].pack('C*')
     challenge = cipher.update(challenge) + cipher.final
-    challenge.rotate!
+    challenge = challenge.bytes.rotate
 
     # Generate 8 bytes random number and encrypt the response 
     random_number = SecureRandom.random_bytes(8)
     cipher.encrypt
-    cipher.iv = next_iv
-    response = cipher.update(challenge.pack('C*') + random_number) + cipher.final
+    cipher.iv = next_iv.pack('C*')
+    response = cipher.update(random_number + challenge.pack('C*')) + cipher.final
+    response = response.bytes
 
     # Receive verification
-    buffer = [0xAF, [response].unpack('H*')]
+    buffer = [0xAF] + response
     status, received_data = mifare_transceive(buffer)
     return status if status != :status_ok
     return :status_unknown_data if received_data[0] != 0x00
 
     # Check if verification matches random_number rotated by 8 bits
     cipher.decrypt
-    cipher.iv = [response[-16..-1]].pack('H*')
+    cipher.iv = response[-8..-1].pack('C*')
     verification = received_data[1..8].pack('C*')
     verification = cipher.update(verification) + cipher.final
 
-    if random_number.bytes.rotate! != verification
+    if random_number.bytes.rotate != verification.bytes
       picc_halt
       return :status_auth_failed
     end
@@ -618,7 +627,7 @@ class Mfrc522
       return :status_crc_error if received_data.size < 3 || valid_bits != 0
 
       status = check_crc(received_data)
-      return status, received_data
+      return status, received_data[0..-3]
     end
 
     # Data doesn't exist, check mifare acknowledge
@@ -628,133 +637,4 @@ class Mfrc522
     return :status_ok
   end
 
-  # Read Mifare block address
-  def mifare_read(block_addr)
-    buffer = [PICC_MF_READ, block_addr]
-
-    status, received_data = mifare_transceive(buffer)
-    return status if status != :status_ok
-
-    return :status_ok, received_data
-  end
-
-  # Write Mifare block address
-  def mifare_write(block_addr, send_data)
-    buffer = [PICC_MF_WRITE, block_addr]
-
-    # Ask PICC if we can write to block_addr
-    status = mifare_transceive(buffer)
-    return status if status != :status_ok
-
-    # Then start transfer our data
-    status = mifare_transceive(send_data)
-    return status if status != :status_ok
-
-    return :status_ok
-  end
-
-  # Write helper for Mifare UL
-  def mifare_ultralight_write(page, send_data)
-    # Page 2-15, each 4 bytes
-    buffer = [PICC_UL_WRITE, page]
-    buffer += send_data[0..3]
-
-    status = mifare_transceive(buffer)
-    return status if status != :status_ok
-
-    return :status_ok
-  end
-
-  # Helper for reading value block
-  def mifare_get_value(block_addr)
-    status, received_data = mifare_read(block_addr)
-    return status if status != :status_ok
-  
-    value = (received_data[3] << 24) + (received_data[2] << 16) + (received_data[1] << 8) + received_data[0]
-  
-    return :status_ok, value
-  end
-
-  # Helper for writing value block
-  def mifare_set_value(block_addr, value)
-    # Value block format
-    #
-    # byte 0..3:   32 bit value in little endian
-    # byte 4..7:   copy of byte 0..3, with inverted bits (aka. XOR 255)
-    # byte 8..11:  copy of byte 0..3
-    # byte 12:     index of backup block (can be any value)
-    # byte 13:     copy of byte 12 with inverted bits (aka. XOR 255)
-    # byte 14:     copy of byte 12
-    # byte 15:     copy of byte 13
-    buffer = []
-    buffer[0]  = value & 0xFF
-    buffer[1]  = (value >> 8) & 0xFF
-    buffer[2]  = (value >> 16) & 0xFF
-    buffer[3]  = (value >> 24) & 0xFF
-    buffer[4]  = ~buffer[0]
-    buffer[5]  = ~buffer[1]
-    buffer[6]  = ~buffer[2]
-    buffer[7]  = ~buffer[3]
-    buffer[8]  = buffer[0]
-    buffer[9]  = buffer[1]
-    buffer[10] = buffer[2]
-    buffer[11] = buffer[3]
-    buffer[12] = block_addr
-    buffer[13] = ~block_addr
-    buffer[14] = buffer[12]
-    buffer[15] = buffer[13]
-  
-    mifare_write(block_addr, buffer)
-  end
-
-  # Helper for increment, decrement, and restore command
-  def mifare_two_step(command, block_addr, value)
-    buffer = [command, block_addr]
-    send_data = [ # Split integer into array of bytes
-      value & 0xFF,
-      (value >> 8) & 0xFF,
-      (value >> 16) & 0xFF,
-      (value >> 24) & 0xFF
-    ]
-    
-    # Ask PICC if we can write to block_addr
-    status = mifare_transceive(buffer)
-    return status if status != :status_ok
-
-    # Then start transfer our data
-    status = mifare_transceive(send_data, true) # Accept timeout
-    return status if status != :status_ok
-
-    return :status_ok
-  end
-
-  # Mifare increment helper
-  # MIFARE Classic only
-  def mifare_increment(block_addr, delta)
-    mifare_two_step(PICC_MF_INCREMENT, block_addr, delta)
-  end
-
-  # Mifare decrement helper
-  # MIFARE Classic only
-  def mifare_decrement(block_addr, delta)
-    mifare_two_step(PICC_MF_DECREMENT, block_addr, delta)
-  end
-
-  # Mifare restore helper
-  # MIFARE Classic only
-  def mifare_restore(block_addr)
-    mifare_two_step(PICC_MF_RESTORE, block_addr, 0)
-  end
-
-  # Mifare transfer helper
-  # MIFARE Classic only
-  def mifare_transfer(block_addr)
-    buffer = [PICC_MF_TRANSFER, block_addr]
-
-    status = mifare_transceive(buffer)
-    return status if status != :status_ok
-
-    return :status_ok
-  end
 end
-
