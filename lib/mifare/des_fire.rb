@@ -1,5 +1,5 @@
 module Mifare
-  class DESFire
+  class DESFire < Base
     def self.say
       puts 'yo'
     end

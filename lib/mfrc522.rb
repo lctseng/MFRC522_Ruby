@@ -1,5 +1,6 @@
 require 'pi_piper'
 
+require 'mifare/base'
 require 'mifare/classic'
 require 'mifare/ultralight'
 require 'mifare/ultralight_c'
@@ -245,7 +246,7 @@ class MFRC522
     return :status_ok
   end
 
-  # PICC transceive helper
+  # PCD transceive helper
   def communicate_with_picc(command, send_data, framing_bit = 0, check_crc = false)
     wait_irq = 0x00
     wait_irq = 0x10 if command == PCD_MFAuthent
@@ -314,7 +315,7 @@ class MFRC522
     return :status_ok
   end
 
-  # Instruct PICC in ACTIVE state go to HALT
+  # Instruct PICC in ACTIVE state go to HALT state
   def picc_halt
     buffer = [PICC_HLTA, 0]
 
@@ -445,6 +446,24 @@ class MFRC522
     return :status_ok, uid, sak
   end
 
+  # Trying to wake it up again
+  def reestablish_picc_communication(uid)
+    status = picc_halt
+    return status if status != :status_ok
+
+    status = picc_request(PICC_WUPA)
+    return status if status != :status_ok
+
+    status, new_uid, new_sak = picc_select
+    return status if status != :status_ok
+
+    if uid == new_uid
+      return :status_ok
+    else
+      return :status_different_card_detected
+    end
+  end
+
   # Lookup error message
   def error_type(error)
     case error
@@ -469,7 +488,11 @@ class MFRC522
     when :status_auth_failed
       'Authentication failed'
     when :status_data_length_error
-      'Incorrect input data'
+      'Incorrect input data length'
+    when :status_incorrect_input
+      'Incorrect input'
+    when :status_different_card_detected
+      'Different card detected while reselecting'
     when :status_error
       'Something went wrong'
     else
@@ -478,7 +501,7 @@ class MFRC522
   end
 
   # Lookup PICC name using sak
-  def picc_type(sak)
+  def identify_model(sak)
     # SAK coding separation reference:
     # http://cache.nxp.com/documents/application_note/AN10833.pdf
     # http://www.nxp.com/documents/application_note/130830.pdf
@@ -522,12 +545,7 @@ class MFRC522
       return 'ISO/IEC 18092'
     end
 
-    'Unknown'
-  end
-
-  # Check if Mifare PICC
-  def mifare_protocol?(sak)
-    sak & 0x20 != 1
+    return 'Unknown'
   end
 
   # Start encrypted Crypto1 communication between reader and Mifare PICC

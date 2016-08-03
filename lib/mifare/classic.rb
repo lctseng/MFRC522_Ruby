@@ -1,11 +1,5 @@
 module Mifare
-  class Classic
-    
-    def initialize(pcd, uid, sak)
-      @pcd = pcd
-      @uid = uid
-      @sak = sak
-    end
+  class Classic < Base
 
     def auth(block_addr, key = {})
       if key[:a]
@@ -13,7 +7,7 @@ module Mifare
       elsif key[:b]
         @pcd.mifare_crypto1_authenticate(MFRC522::PICC_MF_AUTH_KEY_B, block_addr, key[:b], @uid)
       else
-        false
+        :status_incorrect_input
       end
     end
 
@@ -52,8 +46,8 @@ module Mifare
     
       value = (received_data[3] << 24) +
               (received_data[2] << 16) +
-              (received_data[1] <<  8) +
-              (received_data[0] <<  0)
+              (received_data[1] << 8) +
+              received_data[0]
     
       return :status_ok, value
     end
@@ -91,29 +85,6 @@ module Mifare
       write(block_addr, buffer)
     end
 
-    # Helper for increment, decrement, and restore command
-    def two_step(command, block_addr, value)
-      return :status_data_length_error if value.size > 4
-
-      buffer = [command, block_addr]
-      send_data = [ # Split integer into array of bytes
-        (value >>  0) & 0xFF,
-        (value >>  8) & 0xFF,
-        (value >> 16) & 0xFF,
-        (value >> 24) & 0xFF
-      ]
-      
-      # Ask PICC if we can write to block_addr
-      status = @pcd.mifare_transceive(buffer)
-      return status if status != :status_ok
-
-      # Then start transfer our data
-      status = @pcd.mifare_transceive(send_data, true) # Accept timeout
-      return status if status != :status_ok
-
-      return :status_ok
-    end
-
     # Increment: Increments the contents of a block and stores the result in the internal Transfer Buffer
     def increment(block_addr, delta)
       two_step(MFRC522::PICC_MF_INCREMENT, block_addr, delta)
@@ -139,10 +110,32 @@ module Mifare
       return :status_ok
     end
 
-    def halt
-      @pcd.picc_halt  
-    end
-
     # TODO: access bits control
+
+    private
+
+    # Helper for increment, decrement, and restore command
+    def two_step(command, block_addr, value)
+      return :status_data_length_error if value.size > 4
+
+      buffer = [command, block_addr]
+      send_data = [ # Split integer into array of bytes
+        value & 0xFF,
+        (value >> 8) & 0xFF,
+        (value >> 16) & 0xFF,
+        (value >> 24) & 0xFF
+      ]
+      
+      # Ask PICC if we can write to block_addr
+      status = @pcd.mifare_transceive(buffer)
+      return status if status != :status_ok
+
+      # Then start transfer our data
+      status = @pcd.mifare_transceive(send_data, true) # Accept timeout
+      return status if status != :status_ok
+
+      return :status_ok
+    end
+    
   end
 end

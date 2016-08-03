@@ -1,5 +1,5 @@
 module Mifare
-  class Plus
+  class Plus < Base
     def self.say
       puts 'Hello'
     end

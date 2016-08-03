@@ -1,11 +1,5 @@
 module Mifare
-  class Ultralight
-
-    def initialize(pcd, uid, sak)
-      @pcd = pcd
-      @uid = uid
-      @sak = sak
-    end
+  class Ultralight < Base
 
     def read(block_addr)
       buffer = [MFRC522::PICC_MF_READ, block_addr]
@@ -27,10 +21,6 @@ module Mifare
       return status if status != :status_ok
 
       return :status_ok
-    end
-
-    def halt
-      @pcd.picc_halt  
     end
 
   end
