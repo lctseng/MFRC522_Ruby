@@ -11,7 +11,7 @@ You can install it by doing `gem install mfrc522` or using bundler.
 RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master/Mfrc522).
 
 ##Project Status
-Author has confirmed that it works with Mifare Classic and Mifare Ultralight series.
+Author has confirmed that it works with Mifare Classic, Mifare Ultralight, and Mifare Ultralight C.
 
 Support for Mifare Ultralight C 3DES authentication since gem version 0.2.0.
 

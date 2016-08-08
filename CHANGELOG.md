@@ -2,7 +2,7 @@
 
 *   Introduce PICC abstraction.
 
-*   Add support for Mifare Ultralight series.
+*   Add support for Mifare Ultralight and Mifare Ultralight C.
 
 *   Class name now comes all uppercased.
 
@@ -12,7 +12,7 @@
 
 ## Mfrc522 0.1.0 ##
 
-*   Fixed critical bug in picc_select.
+*   Fixed critical bug in `picc_select`.
 
 *   `mifare_authenticate` and `mifare_deauthenticate` renamed to
     `mifare_crypto1_authenticate` and `mifare_crypto1_deauthenticate` respectively.
