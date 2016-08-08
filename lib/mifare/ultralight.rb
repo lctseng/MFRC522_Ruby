@@ -1,6 +1,19 @@
 module Mifare
   class Ultralight < Base
 
+    def initialize(pcd, uid, sak)
+      super
+      @is_c = false
+
+      # Check if Ultralight C
+      status, received_data = @pcd.mifare_ultralight_3des_check
+      if status == :status_ok
+        extend UltralightC
+        @is_c = true
+      end
+      resume_communication
+    end
+
     def read(block_addr)
       buffer = [MFRC522::PICC_MF_READ, block_addr]
 
@@ -21,6 +34,10 @@ module Mifare
       return status if status != :status_ok
 
       return :status_ok
+    end
+
+    def is_c?
+      @is_c
     end
 
   end

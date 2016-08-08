@@ -1,9 +1,9 @@
 module Mifare
-  class UltralightC < Ultralight
+  module UltralightC
     
     # Using 16 bytes hex string for 3DES authentication
     def auth(key)
-      @pcd.mifare_3des_authenticate(key)
+      @pcd.mifare_ultralight_3des_authenticate(key)
     end
 
     def write_des_key(key)

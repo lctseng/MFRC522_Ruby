@@ -110,8 +110,6 @@ module Mifare
       return :status_ok
     end
 
-    # TODO: access bits control
-
     private
 
     # Helper for increment, decrement, and restore command
@@ -136,6 +134,6 @@ module Mifare
 
       return :status_ok
     end
-    
+
   end
 end

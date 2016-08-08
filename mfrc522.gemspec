@@ -1,7 +1,7 @@
 Gem::Specification.new do |s|
   s.name        = 'mfrc522'
   s.version     = '0.2.0'
-  s.date        = '2016-08-22'
+  s.date        = '2016-08-08'
   s.summary     = 'MFRC522 RFID Reader Library for RaspberryPi'
   s.authors     = ['atitan']
   s.email       = 'commit@atifans.net'

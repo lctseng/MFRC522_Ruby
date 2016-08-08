@@ -1,3 +1,11 @@
+## MFRC522 0.2.0 ##
+
+*   Introduce PICC abstraction.
+
+*   Add support for Mifare Ultralight series.
+
+*   Class name now comes all uppercased.
+
 ## Mfrc522 0.1.2 ##
 
 *   Add addtional check on buffer while selecting card.

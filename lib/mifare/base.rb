@@ -10,12 +10,12 @@ module Mifare
       @sak = sak
     end
 
-    def re
-      
+    def resume_communication
+      @pcd.reestablish_picc_communication(@uid)
     end
 
     def halt
-      @pcd.picc_halt  
+      @pcd.picc_halt
     end
 
   end

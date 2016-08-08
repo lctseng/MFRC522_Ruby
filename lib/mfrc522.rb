@@ -1,5 +1,9 @@
 require 'pi_piper'
 
+# For 3DES auth
+require 'openssl'
+require 'securerandom'
+
 require 'mifare/base'
 require 'mifare/classic'
 require 'mifare/ultralight'
@@ -33,8 +37,8 @@ class MFRC522
   # The commands used for MIFARE Ultralight (from http://www.nxp.com/documents/data_sheet/MF0ICU1.pdf, Section 8.6)
   # The PICC_MF_READ and PICC_MF_WRITE can also be used for MIFARE Ultralight.
   PICC_UL_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
-  # The commands here is for 3DES Authentication
-  PICC_MF_3DES_AUTH   = 0x1A
+  # The commands here is for Ultralight 3DES Authentication
+  PICC_UL_3DES_AUTH   = 0x1A
   #
   PICC_MF_ACK         = 0x0A   # Mifare Acknowledge
 
@@ -464,6 +468,11 @@ class MFRC522
     end
   end
 
+  # ISO/IEC 14443-4 select
+  def iso_select
+    
+  end
+
   # Lookup error message
   def error_type(error)
     case error
@@ -506,46 +515,46 @@ class MFRC522
     # http://cache.nxp.com/documents/application_note/AN10833.pdf
     # http://www.nxp.com/documents/application_note/130830.pdf
     if sak & 0x04 != 0
-      return 'UID not complete'
+      return :picc_uid_not_complete
     end
 
     if sak & 0x02 != 0
-      return 'Reserved SAK'
+      return :picc_reserved_future_use
     end
 
     if sak & 0x08 != 0
       if sak & 0x10 != 0
-        return 'MIFARE 4K'
+        return :picc_mifare_4k
       end
 
       if sak & 0x01 != 0
-        return 'MIFARE Mini'
+        return :picc_mifare_mini
       end
       
-      return 'MIFARE 1K'
+      return :picc_mifare_1k
     end
 
     if sak & 0x10 != 0
       if sak & 0x01 != 0
-        return 'MIFARE Plus 4K SL2'
+        return :picc_mifare_plus_4k_sl2
       end
         
-      return 'MIFARE Plus 2K SL2'
+      return :picc_mifare_plus_2k_sl2
     end
 
     if sak == 0x00
-      return 'MIFARE Ultralight'
+      return :picc_mifare_ultralight
     end
 
     if sak & 0x20 != 0
-      return 'ISO/IEC 14443-4'
+      return :picc_iso_14443_4
     end
 
     if sak & 0x40 != 0
-      return 'ISO/IEC 18092'
+      return :picc_iso_18092
     end
 
-    return 'Unknown'
+    return :picc_unknown
   end
 
   # Start encrypted Crypto1 communication between reader and Mifare PICC
@@ -577,23 +586,27 @@ class MFRC522
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  def mifare_3des_authenticate(des_key)
-    require 'openssl'
-    require 'securerandom'
+  def mifare_ultralight_3des_check
+    # Ask for authentication
+    buffer = [PICC_UL_3DES_AUTH, 0x00]
+    status, received_data = mifare_transceive(buffer)
+    return status if status != :status_ok
+    return :status_unknown_data if received_data[0] != 0xAF
+
+    return :status_ok, received_data
+  end
+
+  def mifare_ultralight_3des_authenticate(des_key)
+    status, received_data = mifare_ultralight_3des_check
+    return status if status != :status_ok
+
+    # Use received data as IV for next transmission
+    next_iv = received_data[1..8]
 
     # Cipher
     cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
     cipher.key = [des_key*2].pack('H*')
     cipher.padding = 0
-
-    # Ask for authentication
-    buffer = [PICC_MF_3DES_AUTH, 0x00]
-    status, received_data = mifare_transceive(buffer)
-    return status if status != :status_ok
-    return :status_unknown_data if received_data[0] != 0xAF
-
-    # Use received data as IV for next transmission
-    next_iv = received_data[1..8]
 
     # Decrypt challenge random number and rotate it by 8 bits
     cipher.decrypt
