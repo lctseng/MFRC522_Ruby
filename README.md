@@ -5,7 +5,7 @@
 This is a Ruby port of [miguelbalboa/rfid](https://github.com/miguelbalboa/rfid) for Raspberry Pi.
 
 ##Installation
-You can install it by doing `gem install mfrc522`.
+You can install it by doing `gem install mfrc522` or using bundler.
 
 ##Documentation
 RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master/Mfrc522).
@@ -86,7 +86,7 @@ card = Mifare::Ultralight.new(reader, uid, sak)
 
 # Check whether Ultralight C or not
 if card.is_c?
-  # Write 3DES keys
+  # Write 16 bytes 3DES keys
   status = card.write_des_key('49454D4B41455242214E4143554F5946')
 
   # Restart the PICC then authenticate to see if it worked

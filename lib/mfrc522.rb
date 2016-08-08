@@ -586,6 +586,7 @@ class MFRC522
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
+  # Check if PICC support Ultralight 3DES command
   def mifare_ultralight_3des_check
     # Ask for authentication
     buffer = [PICC_UL_3DES_AUTH, 0x00]
@@ -596,6 +597,7 @@ class MFRC522
     return :status_ok, received_data
   end
 
+  # Process Ultralight challenge–response authentication
   def mifare_ultralight_3des_authenticate(des_key)
     status, received_data = mifare_ultralight_3des_check
     return status if status != :status_ok
