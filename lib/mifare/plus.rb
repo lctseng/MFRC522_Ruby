@@ -1,5 +1,5 @@
 module Mifare
-  class Plus < Base
+  class Plus < ::PICC
     def self.say
       puts 'Hello'
     end

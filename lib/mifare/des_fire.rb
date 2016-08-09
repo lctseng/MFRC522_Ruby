@@ -1,5 +1,5 @@
 module Mifare
-  class DESFire < Base
+  class DESFire < ::PICC
     def self.say
       puts 'yo'
     end

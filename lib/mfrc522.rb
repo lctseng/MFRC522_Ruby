@@ -4,7 +4,8 @@ require 'pi_piper'
 require 'openssl'
 require 'securerandom'
 
-require 'mifare/base'
+require 'picc'
+require 'iso144434'
 require 'mifare/classic'
 require 'mifare/ultralight'
 require 'mifare/ultralight_c'
@@ -37,10 +38,12 @@ class MFRC522
   # The commands used for MIFARE Ultralight (from http://www.nxp.com/documents/data_sheet/MF0ICU1.pdf, Section 8.6)
   # The PICC_MF_READ and PICC_MF_WRITE can also be used for MIFARE Ultralight.
   PICC_UL_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
-  # The commands here is for Ultralight 3DES Authentication
-  PICC_UL_3DES_AUTH   = 0x1A
-  #
-  PICC_MF_ACK         = 0x0A   # Mifare Acknowledge
+  PICC_UL_3DES_AUTH   = 0x1A  # Ultralight C 3DES Authentication
+  # Mifare Acknowledge
+  PICC_MF_ACK         = 0x0A
+  # The commands used for ISO/IEC 14443-4
+  PICC_ISO_RATS       = 0xE0
+  PICC_ISO_PPS        = 0xD0
 
   # PCD commands
   PCD_Idle          = 0x00  # no action, cancels current command execution
@@ -113,13 +116,14 @@ class MFRC522
   TestADCReg        = 0x3B  # shows the value of ADC I and Q channels
 
   # Constructor
-  def initialize(nrstpd = 24, chip = 0, spd = 8000000, timer = 50)
+  def initialize(nrstpd = 24, chip = 0, spd = 8000000, timer = 256)
     chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
                     1 => PiPiper::Spi::CHIP_SELECT_1,
                     2 => PiPiper::Spi::CHIP_SELECT_BOTH,
                     3 => PiPiper::Spi::CHIP_SELECT_NONE }
     @spi_chip = chip_option[chip]
     @spi_spd = spd
+    @timer = timer
 
     # Power it up
     nrstpd_pin = PiPiper::Pin.new(pin: nrstpd, direction: :out)
@@ -128,13 +132,13 @@ class MFRC522
 
     soft_reset # Perform software reset
 
-    write_spi(TModeReg, 0x8D) # Start timer by setting TAuto=1, and higher part of TPrescalerReg
-    write_spi(TPrescalerReg, 0x3E) # Set lower part of TPrescalerReg, and results in 2khz timer (f_timer = 13.56 MHz / (2*TPreScaler+1))
-    write_spi(TReloadRegH, (timer >> 8))
-    write_spi(TReloadRegL, (timer & 0xFF)) # 50 ticks @2khz defines 25ms per timer cycle
+    write_spi(TModeReg, 0x87) # Start timer by setting TAuto=1, and higher part of TPrescalerReg
+    write_spi(TPrescalerReg, 0xFF) # Set lower part of TPrescalerReg, and results in 302us timer (f_timer = 13.56 MHz / (2*TPreScaler+1))
     
     write_spi(TxASKReg, 0x40) # Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
     write_spi(ModeReg, 0x3D) # Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
+
+    pcd_config_reset # default 256 ticks on 302us timer defines 77.33ms per timer cycle
 
     antenna_on # Turn antenna on. They were disabled by the reset.
   end
@@ -143,6 +147,26 @@ class MFRC522
   def soft_reset
     write_spi(CommandReg, PCD_SoftReset)
     sleep 1.0 / 20.0 # wait 50ms
+  end
+
+  # Reset PCD config to default
+  def pcd_config_reset
+    # Clear ValuesAfterColl bit
+    write_spi_clear_bitmask(CollReg, 0x80)
+    # Reset picc baud rate to 106 kBd
+    write_spi(TxModeReg, 0x00)
+    write_spi(RxModeReg, 0x00)
+    # Set timer to default value
+    internal_timer(@timer)
+  end
+
+  # Set PCD timer value for 302us default timer
+  def internal_timer(timer = nil)
+    if timer
+      write_spi(TReloadRegH, (timer >> 8) & 0xFF)
+      write_spi(TReloadRegL, (timer & 0xFF))
+    end
+    (read_spi(TReloadRegH) << 8) | read_spi(TReloadRegL)
   end
 
   # Read from SPI communication
@@ -309,7 +333,7 @@ class MFRC522
   #
   # Accept PICC_REQA and PICC_WUPA command
   def picc_request(picc_command)
-    write_spi_clear_bitmask(CollReg, 0x80)  # ValuesAfterColl=1 => Bits received after collision are cleared.
+    pcd_config_reset
 
     status, _received_data, valid_bits = communicate_with_picc(PCD_Transceive, picc_command, 0x07)
 
@@ -364,8 +388,8 @@ class MFRC522
     #  10 bytes        1       CT    uid0  uid1  uid2
     #                  2       CT    uid3  uid4  uid5
     #                  3       uid6  uid7  uid8  uid9
+    pcd_config_reset
 
-    write_spi_clear_bitmask(CollReg, 0x80)    # ValuesAfterColl=1 => Bits received after collision are cleared.
     select_level = [PICC_SEL_CL1, PICC_SEL_CL2, PICC_SEL_CL3]
     uid = []
 
@@ -466,11 +490,6 @@ class MFRC522
     else
       return :status_different_card_detected
     end
-  end
-
-  # ISO/IEC 14443-4 select
-  def iso_select
-    
   end
 
   # Lookup error message
@@ -590,7 +609,7 @@ class MFRC522
   def mifare_ultralight_3des_check
     # Ask for authentication
     buffer = [PICC_UL_3DES_AUTH, 0x00]
-    status, received_data = mifare_transceive(buffer)
+    status, received_data = picc_transceive(buffer)
     return status if status != :status_ok
     return :status_unknown_data if received_data[0] != 0xAF
 
@@ -626,7 +645,7 @@ class MFRC522
 
     # Receive verification
     buffer = [0xAF] + response
-    status, received_data = mifare_transceive(buffer)
+    status, received_data = picc_transceive(buffer)
     return status if status != :status_ok
     return :status_unknown_data if received_data[0] != 0x00
 
@@ -645,15 +664,19 @@ class MFRC522
   end
 
   # Helper that append CRC to buffer and check CRC or Mifare acknowledge
-  def mifare_transceive(send_data, accept_timeout = false)
+  def picc_transceive(send_data, accept_timeout = false)
     # Append CRC
     status, send_data = append_crc(send_data)
     return status if status != :status_ok
+
+    puts "Sending Data: #{send_data.map{|x|x.to_s(16)}}"
 
     # Transfer data
     status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, send_data)
     return :status_ok if status == :status_picc_timeout && accept_timeout
     return status if status != :status_ok
+
+    puts "Received Data: #{received_data.map{|x|x.to_s(16)}}"
 
     # Data exists, check CRC and return
     if received_data.size > 1

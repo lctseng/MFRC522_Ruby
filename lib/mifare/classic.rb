@@ -1,5 +1,5 @@
 module Mifare
-  class Classic < Base
+  class Classic < ::PICC
 
     def auth(block_addr, key = {})
       if key[:a]
@@ -18,7 +18,7 @@ module Mifare
     def read(block_addr)
       buffer = [MFRC522::PICC_MF_READ, block_addr]
 
-      status, received_data = @pcd.mifare_transceive(buffer)
+      status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       return :status_ok, received_data
@@ -30,11 +30,11 @@ module Mifare
       buffer = [MFRC522::PICC_MF_WRITE, block_addr]
 
       # Ask PICC if we can write to block_addr
-      status = @pcd.mifare_transceive(buffer)
+      status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       # Then start transfer our data
-      status = @pcd.mifare_transceive(send_data)
+      status = @pcd.picc_transceive(send_data)
       return status if status != :status_ok
 
       return :status_ok
@@ -104,7 +104,7 @@ module Mifare
     def transfer(block_addr)
       buffer = [MFRC522::PICC_MF_TRANSFER, block_addr]
 
-      status = @pcd.mifare_transceive(buffer)
+      status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       return :status_ok
@@ -125,11 +125,11 @@ module Mifare
       ]
       
       # Ask PICC if we can write to block_addr
-      status = @pcd.mifare_transceive(buffer)
+      status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       # Then start transfer our data
-      status = @pcd.mifare_transceive(send_data, true) # Accept timeout
+      status = @pcd.picc_transceive(send_data, true) # Accept timeout
       return status if status != :status_ok
 
       return :status_ok

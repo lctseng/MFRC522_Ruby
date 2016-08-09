@@ -27,13 +27,14 @@ Mifare Classic Demo Code
 require 'mfrc522'
 
 # NRSTPD(or RST) is the pin to power up the chip.
-# Timer is the value of internal timer for timeout interrupt. 50 means 25ms.
+# Timer is the value of internal timer for timeout interrupt.
+# Frequency is 302us, value 256 means 77.33ms.
 # SPD unit is in bps(hertz), 8000000 = 8Mbps = 8Mhz
 # chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
 #                 1 => PiPiper::Spi::CHIP_SELECT_1,
 #                 2 => PiPiper::Spi::CHIP_SELECT_BOTH,
 #                 3 => PiPiper::Spi::CHIP_SELECT_NONE }
-reader = MFRC522.new(nrstpd = 24, chip = 0, spd = 8000000, timer = 50)
+reader = MFRC522.new(nrstpd = 24, chip = 0, spd = 8000000, timer = 256)
 
 # Wakes the PICC
 status = reader.picc_request(MFRC522::PICC_REQA)

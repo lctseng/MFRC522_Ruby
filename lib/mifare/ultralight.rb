@@ -1,5 +1,5 @@
 module Mifare
-  class Ultralight < Base
+  class Ultralight < ::PICC
 
     def initialize(pcd, uid, sak)
       super
@@ -17,7 +17,7 @@ module Mifare
     def read(block_addr)
       buffer = [MFRC522::PICC_MF_READ, block_addr]
 
-      status, received_data = @pcd.mifare_transceive(buffer)
+      status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       return :status_ok, received_data
@@ -30,7 +30,7 @@ module Mifare
       buffer = [MFRC522::PICC_UL_WRITE, page]
       buffer += send_data
 
-      status = @pcd.mifare_transceive(buffer)
+      status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
       return :status_ok
