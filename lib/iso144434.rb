@@ -3,6 +3,10 @@ class ISO144434 < PICC
   FSCI_to_FSC = { 0 => 16, 1 => 24, 2 => 32, 3 => 40, 4 => 48,
                   5 => 64, 6 => 96, 7 => 128, 8 => 256 }
 
+  CMD_RATS       = 0xE0
+  CMD_PPS        = 0xD0
+  CMD_DESELECT   = 0xC2
+
   def initialize(pcd, uid, sak)
     super
 
@@ -10,35 +14,123 @@ class ISO144434 < PICC
     @fsc = 16 # Assume PICC only supports 16 bytes frame
     @fwt = 256 # 77.33ms(256 ticks) default frame waiting time
 
-    @supt_cid = false
-    @supt_nad = false
+    @support_cid = false
+    @support_nad = false
+    @block_number = 0
+    @selected = false
   end
 
   # ISO/IEC 14443-4 select
   def select
     # Send RATS (Request for Answer To Select)
-    buffer = [MFRC522::PICC_ISO_RATS, 0x50 | @cid]
+    buffer = [CMD_RATS, 0x50 | @cid]
     status, received_data = @pcd.picc_transceive(buffer)
     return status if status != :status_ok
 
     dr, ds = process_ats(received_data)
 
     # Send PPS (Protocol and Parameter Selection Request)
-    buffer = [MFRC522::PICC_ISO_PPS | @cid, 0x11, (ds << 2) | dr]
+    buffer = [CMD_PPS | @cid, 0x11, (ds << 2) | dr]
     status, received_data = @pcd.picc_transceive(buffer)
     return status if status != :status_ok
     return :status_unknown_data if received_data[0] != (0xD0 | @cid)
 
     # Set PCD baud rate
+    dr |= 0x08 if dr != 0 # Enable TxCRCEn on higher baud rate
+    ds |= 0x08 if ds != 0
     @pcd.write_spi(MFRC522::TxModeReg, (dr << 4))
     @pcd.write_spi(MFRC522::RxModeReg, (ds << 4))
+
+    @block_number = 0
+    @selected = true
 
     return :status_ok
   end
 
   # Send S(DESELECT)
   def deselect
-    
+    buffer = [CMD_DESELECT]
+    status, received_data = @pcd.picc_transceive(buffer)
+    return status if status != :status_ok
+
+    if received_data[0] & 0xF7 == CMD_DESELECT
+      @selected = false
+      return :status_ok
+    else
+      return :status_unknown_data
+    end
+  end
+
+  # Wrapper for handling ISO protocol
+  def transceive(send_data)
+    # Split data according to PICC's spec
+    chained_data = send_data.each_slice(@fsc - 5).to_a
+    pcb = 0x02
+
+    # Send chained data
+    while !chained_data.empty?
+      pcb &= 0xEF # reset chaining indicator
+      pcb |= 0x10 if chained_data.size > 1
+      pcb |= @block_number
+      data = chained_data.shift
+
+      buffer = [pcb] + data
+
+      finished = false
+      while !finished
+        status, received_data = handle_wtx(buffer)
+        return status if status != :status_ok
+
+        r_pcb = received_data[0]
+
+        # Check ACK
+        if r_pcb & 0xF6 == 0xA2
+          finished = true if (pcb & 0x01) == (r_pcb & 0x01)
+        else
+          finished = true
+        end
+      end
+
+      @block_number ^= 1 # toggle block number for next frame
+    end
+
+    received_chained_data = [received_data]
+
+    # Receive chained data
+    while r_pcb & 0x10 != 0
+      ack = 0xA2 | @block_number
+      status, received_data = handle_wtx([ack])
+      return status if status != :status_ok
+
+      r_pcb = received_data[0]
+
+      received_chained_data << received_data
+
+      @block_number ^= 1
+    end
+
+    inf = []
+
+    # Collect INF from chain
+    received_chained_data.each do |data|
+      inf_position = 1
+      inf_position += 1 if data[0] & 0x08 != 0 # CID present
+      inf_position += 1 if data[0] & 0x04 != 0 # NAD present
+
+      inf += data[inf_position..-1]
+    end
+
+    return :status_ok, inf
+  end
+
+  private
+
+  def convert_iso_baud_rate_to_pcd_setting(value)
+    x = (value >> 2) & 0x01
+    y = (value >> 1) & 0x01
+    z = value & 0x01
+
+    ((x | y) << 1) + (x | ( ~y & z ))
   end
 
   # Gether information from ATS (Answer to Select)
@@ -61,6 +153,10 @@ class ISO144434 < PICC
       # Convert fastest baud rate to PCD setting
       dr = convert_iso_baud_rate_to_pcd_setting(dr)
       ds = convert_iso_baud_rate_to_pcd_setting(ds)
+
+      # Temporary workaround
+      dr = 0
+      ds = 0
     end
 
     # Set timeout
@@ -82,8 +178,8 @@ class ISO144434 < PICC
       position += 1
       tc = ats[position]
       
-      @supt_cid = true if tc & 0x02 != 0
-      @supt_nad = true if tc & 0x01 != 0
+      @support_cid = true if tc & 0x02 != 0
+      @support_nad = true if tc & 0x01 != 0
     end
 
     # PICC requested guard time before going to next step
@@ -92,45 +188,17 @@ class ISO144434 < PICC
     return dr, ds
   end
 
-  # Wrapper for handling ISO protocol
-  def transceive(send_data)
-    # Split data according to PICC's spec
-    chained_data = send_data.each_slice(@fsc - 5).to_a
-    pcb = 0x02
-
-    # Send chained data
-    while !chained_data.empty?
-      pcb &= 0xEF # reset chaining indicator
-      pcb |= 0x10 if chained_data.size > 1
-      data = chained_data.shift
-
-      buffer = [pcb] + data
-
-      finished = false
-      while !finished
-        status, received_data = handle_wtx(buffer)
-        return status if status != :status_ok
-
-        r_pcb = received_data[0]
-
-        # Check ACK
-        if r_pcb & 0xF6 == 0xA2
-          finished = true if (pcb & 0x01) == (r_pcb & 0x01)
-        else
-          finished = true
-        end
-      end
-
-      pcb ^= 1 # toggle block number for next frame
-    end
-
-    return :status_ok, received_data
-  end
-
   def handle_wtx(data)
     3.times do
       status, received_data = @pcd.picc_transceive(data)
-      return status if status != :status_ok
+      return status if status != :status_ok && status != :status_picc_timeout
+
+      # Try sending NAK when timeout
+      if status == :status_picc_timeout
+        nak = 0xB2 | @block_number
+        data = [nak]
+        next
+      end
       
       pcb = received_data[0]
 
@@ -142,8 +210,8 @@ class ISO144434 < PICC
         # Set temporary timer
         @pcd.internal_timer(@fwt * wtxm)
 
-        # Reply WTX using received data
-        data = received_data
+        # Set WTX response
+        data = [0xF2, wtxm]
       else
         # Set timer back to FWT
         @pcd.internal_timer(@fwt)
@@ -153,16 +221,6 @@ class ISO144434 < PICC
     end
 
     return :status_picc_timeout
-  end
-
-  private
-
-  def convert_iso_baud_rate_to_pcd_setting(value)
-    x = (value >> 2) & 0x01
-    y = (value >> 1) & 0x01
-    z = value & 0x01
-
-    ((x | y) << 1) + (x | ( ~y & z ))
   end
 
 end

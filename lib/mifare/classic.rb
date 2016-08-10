@@ -1,11 +1,20 @@
 module Mifare
   class Classic < ::PICC
 
+    CMD_AUTH_KEY_A  = 0x60  # Perform authentication with Key A
+    CMD_AUTH_KEY_B  = 0x61  # Perform authentication with Key B
+    CMD_READ        = 0x30  # Reads one 16 byte block from the authenticated sector of the PICC.
+    CMD_WRITE       = 0xA0  # Writes one 16 byte block to the authenticated sector of the PICC.
+    CMD_DECREMENT   = 0xC0  # Decrements the contents of a block and stores the result in the internal data register.
+    CMD_INCREMENT   = 0xC1  # Increments the contents of a block and stores the result in the internal data register.
+    CMD_RESTORE     = 0xC2  # Reads the contents of a block into the internal data register.
+    CMD_TRANSFER    = 0xB0  # Writes the contents of the internal data register to a block.
+
     def auth(block_addr, key = {})
       if key[:a]
-        @pcd.mifare_crypto1_authenticate(MFRC522::PICC_MF_AUTH_KEY_A, block_addr, key[:a], @uid)
+        @pcd.mifare_crypto1_authenticate(CMD_AUTH_KEY_A, block_addr, key[:a], @uid)
       elsif key[:b]
-        @pcd.mifare_crypto1_authenticate(MFRC522::PICC_MF_AUTH_KEY_B, block_addr, key[:b], @uid)
+        @pcd.mifare_crypto1_authenticate(CMD_AUTH_KEY_B, block_addr, key[:b], @uid)
       else
         :status_incorrect_input
       end
@@ -16,7 +25,7 @@ module Mifare
     end
 
     def read(block_addr)
-      buffer = [MFRC522::PICC_MF_READ, block_addr]
+      buffer = [CMD_READ, block_addr]
 
       status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
@@ -27,7 +36,7 @@ module Mifare
     def write(block_addr, send_data)
       return :status_data_length_error if send_data.size != 16
 
-      buffer = [MFRC522::PICC_MF_WRITE, block_addr]
+      buffer = [CMD_WRITE, block_addr]
 
       # Ask PICC if we can write to block_addr
       status = @pcd.picc_transceive(buffer)
@@ -87,22 +96,22 @@ module Mifare
 
     # Increment: Increments the contents of a block and stores the result in the internal Transfer Buffer
     def increment(block_addr, delta)
-      two_step(MFRC522::PICC_MF_INCREMENT, block_addr, delta)
+      two_step(CMD_INCREMENT, block_addr, delta)
     end
 
     # Decrement: Decrements the contents of a block and stores the result in the internal Transfer Buffer
     def decrement(block_addr, delta)
-      two_step(MFRC522::PICC_MF_DECREMENT, block_addr, delta)
+      two_step(CMD_DECREMENT, block_addr, delta)
     end
 
     # Restore: Moves the contents of a block into the internal Transfer Buffer
     def restore(block_addr)
-      two_step(MFRC522::PICC_MF_RESTORE, block_addr, 0)
+      two_step(CMD_RESTORE, block_addr, 0)
     end
 
     # Transfer: Writes the contents of the internal Transfer Buffer to a value block
     def transfer(block_addr)
-      buffer = [MFRC522::PICC_MF_TRANSFER, block_addr]
+      buffer = [CMD_TRANSFER, block_addr]
 
       status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok

@@ -1,9 +1,5 @@
 require 'pi_piper'
 
-# For 3DES auth
-require 'openssl'
-require 'securerandom'
-
 require 'picc'
 require 'iso144434'
 require 'mifare/classic'
@@ -17,33 +13,15 @@ include PiPiper
 class MFRC522
 
   # PICC commands used by the PCD to manage communication with several PICCs (ISO 14443-3, Type A, section 6.4)
-  PICC_REQA           = 0x26  # REQuest command, Type A. Invites PICCs in state IDLE to go to READY and prepare for anticollision or selection. 7 bit frame.
-  PICC_WUPA           = 0x52  # Wake-UP command, Type A. Invites PICCs in state IDLE and HALT to go to READY(*) and prepare for anticollision or selection. 7 bit frame.
-  PICC_CT             = 0x88  # Cascade Tag. Not really a command, but used during anti collision.
-  PICC_SEL_CL1        = 0x93  # Anti collision/Select, Cascade Level 1
-  PICC_SEL_CL2        = 0x95  # Anti collision/Select, Cascade Level 2
-  PICC_SEL_CL3        = 0x97  # Anti collision/Select, Cascade Level 3
-  PICC_HLTA           = 0x50  # HaLT command, Type A. Instructs an ACTIVE PICC to go to state HALT.
-  # The commands used for MIFARE Classic (from http://www.mouser.com/ds/2/302/MF1S503x-89574.pdf, Section 9)
-  # Use PCD_MFAuthent to authenticate access to a sector, then use these commands to read/write/modify the blocks on the sector.
-  # The read/write commands can also be used for MIFARE Ultralight.
-  PICC_MF_AUTH_KEY_A  = 0x60  # Perform authentication with Key A
-  PICC_MF_AUTH_KEY_B  = 0x61  # Perform authentication with Key B
-  PICC_MF_READ        = 0x30  # Reads one 16 byte block from the authenticated sector of the PICC. Also used for MIFARE Ultralight.
-  PICC_MF_WRITE       = 0xA0  # Writes one 16 byte block to the authenticated sector of the PICC. Called "COMPATIBILITY WRITE" for MIFARE Ultralight.
-  PICC_MF_DECREMENT   = 0xC0  # Decrements the contents of a block and stores the result in the internal data register.
-  PICC_MF_INCREMENT   = 0xC1  # Increments the contents of a block and stores the result in the internal data register.
-  PICC_MF_RESTORE     = 0xC2  # Reads the contents of a block into the internal data register.
-  PICC_MF_TRANSFER    = 0xB0  # Writes the contents of the internal data register to a block.
-  # The commands used for MIFARE Ultralight (from http://www.nxp.com/documents/data_sheet/MF0ICU1.pdf, Section 8.6)
-  # The PICC_MF_READ and PICC_MF_WRITE can also be used for MIFARE Ultralight.
-  PICC_UL_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
-  PICC_UL_3DES_AUTH   = 0x1A  # Ultralight C 3DES Authentication
+  PICC_REQA         = 0x26  # REQuest command, Type A. Invites PICCs in state IDLE to go to READY and prepare for anticollision or selection. 7 bit frame.
+  PICC_WUPA         = 0x52  # Wake-UP command, Type A. Invites PICCs in state IDLE and HALT to go to READY(*) and prepare for anticollision or selection. 7 bit frame.
+  PICC_CT           = 0x88  # Cascade Tag. Not really a command, but used during anti collision.
+  PICC_SEL_CL1      = 0x93  # Anti collision/Select, Cascade Level 1
+  PICC_SEL_CL2      = 0x95  # Anti collision/Select, Cascade Level 2
+  PICC_SEL_CL3      = 0x97  # Anti collision/Select, Cascade Level 3
+  PICC_HLTA         = 0x50  # HaLT command, Type A. Instructs an ACTIVE PICC to go to state HALT.
   # Mifare Acknowledge
-  PICC_MF_ACK         = 0x0A
-  # The commands used for ISO/IEC 14443-4
-  PICC_ISO_RATS       = 0xE0
-  PICC_ISO_PPS        = 0xD0
+  PICC_MF_ACK       = 0x0A
 
   # PCD commands
   PCD_Idle          = 0x00  # no action, cancels current command execution
@@ -605,78 +583,20 @@ class MFRC522
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  # Check if PICC support Ultralight 3DES command
-  def mifare_ultralight_3des_check
-    # Ask for authentication
-    buffer = [PICC_UL_3DES_AUTH, 0x00]
-    status, received_data = picc_transceive(buffer)
-    return status if status != :status_ok
-    return :status_unknown_data if received_data[0] != 0xAF
-
-    return :status_ok, received_data
-  end
-
-  # Process Ultralight challenge–response authentication
-  def mifare_ultralight_3des_authenticate(des_key)
-    status, received_data = mifare_ultralight_3des_check
-    return status if status != :status_ok
-
-    # Use received data as IV for next transmission
-    next_iv = received_data[1..8]
-
-    # Cipher
-    cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
-    cipher.key = [des_key*2].pack('H*')
-    cipher.padding = 0
-
-    # Decrypt challenge random number and rotate it by 8 bits
-    cipher.decrypt
-    cipher.iv = "\x00"*8
-    challenge = received_data[1..8].pack('C*')
-    challenge = cipher.update(challenge) + cipher.final
-    challenge = challenge.bytes.rotate
-
-    # Generate 8 bytes random number and encrypt the response 
-    random_number = SecureRandom.random_bytes(8)
-    cipher.encrypt
-    cipher.iv = next_iv.pack('C*')
-    response = cipher.update(random_number + challenge.pack('C*')) + cipher.final
-    response = response.bytes
-
-    # Receive verification
-    buffer = [0xAF] + response
-    status, received_data = picc_transceive(buffer)
-    return status if status != :status_ok
-    return :status_unknown_data if received_data[0] != 0x00
-
-    # Check if verification matches random_number rotated by 8 bits
-    cipher.decrypt
-    cipher.iv = response[-8..-1].pack('C*')
-    verification = received_data[1..8].pack('C*')
-    verification = cipher.update(verification) + cipher.final
-
-    if random_number.bytes.rotate != verification.bytes
-      picc_halt
-      return :status_auth_failed
-    end
-
-    return :status_ok
-  end
-
   # Helper that append CRC to buffer and check CRC or Mifare acknowledge
   def picc_transceive(send_data, accept_timeout = false)
     # Append CRC
     status, send_data = append_crc(send_data)
     return status if status != :status_ok
 
-    puts "Sending Data: #{send_data.map{|x|x.to_s(16)}}"
+    puts "Sending Data: #{send_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
 
     # Transfer data
     status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, send_data)
     return :status_ok if status == :status_picc_timeout && accept_timeout
     return status if status != :status_ok
 
-    puts "Received Data: #{received_data.map{|x|x.to_s(16)}}"
+    puts "Received Data: #{received_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
 
     # Data exists, check CRC and return
     if received_data.size > 1

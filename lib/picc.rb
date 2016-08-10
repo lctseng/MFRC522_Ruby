@@ -7,6 +7,7 @@ class PICC
     @pcd = pcd
     @uid = uid
     @sak = sak
+    @halted = false
   end
 
   def resume_communication
@@ -14,6 +15,7 @@ class PICC
   end
 
   def halt
+    @halted = true
     @pcd.picc_halt
   end
   

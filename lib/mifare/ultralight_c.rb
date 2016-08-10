@@ -1,9 +1,57 @@
+require 'openssl'
+require 'securerandom'
+
 module Mifare
   module UltralightC
     
     # Using 16 bytes hex string for 3DES authentication
     def auth(key)
-      @pcd.mifare_ultralight_3des_authenticate(key)
+      # Ask for authentication
+      buffer = [CMD_3DES_AUTH, 0x00]
+      status, received_data = @pcd.picc_transceive(buffer)
+      return status if status != :status_ok
+      return :status_unknown_data if received_data[0] != 0xAF
+
+      # Use received data as IV for next transmission
+      next_iv = received_data[1..8]
+
+      # Cipher
+      cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
+      cipher.key = [key*2].pack('H*')
+      cipher.padding = 0
+
+      # Decrypt challenge random number and rotate it by 8 bits
+      cipher.decrypt
+      cipher.iv = "\x00"*8
+      challenge = received_data[1..8].pack('C*')
+      challenge = cipher.update(challenge) + cipher.final
+      challenge = challenge.bytes.rotate
+
+      # Generate 8 bytes random number and encrypt the response 
+      random_number = SecureRandom.random_bytes(8)
+      cipher.encrypt
+      cipher.iv = next_iv.pack('C*')
+      response = cipher.update(random_number + challenge.pack('C*')) + cipher.final
+      response = response.bytes
+
+      # Receive verification
+      buffer = [0xAF] + response
+      status, received_data = @pcd.picc_transceive(buffer)
+      return status if status != :status_ok
+      return :status_unknown_data if received_data[0] != 0x00
+
+      # Check if verification matches random_number rotated by 8 bits
+      cipher.decrypt
+      cipher.iv = response[-8..-1].pack('C*')
+      verification = received_data[1..8].pack('C*')
+      verification = cipher.update(verification) + cipher.final
+
+      if random_number.bytes.rotate != verification.bytes
+        halt
+        return :status_auth_failed
+      end
+
+      return :status_ok
     end
 
     def write_des_key(key)
