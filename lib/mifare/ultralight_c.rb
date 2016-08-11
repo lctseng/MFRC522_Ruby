@@ -6,6 +6,10 @@ module Mifare
     
     # Using 16 bytes hex string for 3DES authentication
     def auth(key)
+      # Convert hex to byte array
+      key = [key].pack('H*')
+      return :status_data_length_error if key.size != 16
+
       # Ask for authentication
       buffer = [CMD_3DES_AUTH, 0x00]
       status, received_data = @pcd.picc_transceive(buffer)
@@ -16,8 +20,8 @@ module Mifare
       next_iv = received_data[1..8]
 
       # Cipher
-      cipher = OpenSSL::Cipher.new 'des-ede3-cbc'
-      cipher.key = [key*2].pack('H*')
+      cipher = OpenSSL::Cipher.new('des-ede-cbc')
+      cipher.key = key
       cipher.padding = 0
 
       # Decrypt challenge random number and rotate it by 8 bits

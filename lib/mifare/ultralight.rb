@@ -1,21 +1,19 @@
 module Mifare
   class Ultralight < ::PICC
 
-    CMD_READ        = 0x30  # Reads four 4 byte page from the PICC.
-    CMD_WRITE       = 0xA2  # Writes one 4 byte page to the PICC.
+    CMD_READ        = 0x30  # Reads 4 pages(16 bytes) from the PICC.
+    CMD_WRITE       = 0xA2  # Writes 1 page(4 bytes) to the PICC.
     CMD_3DES_AUTH   = 0x1A  # Ultralight C 3DES Authentication.
 
     def initialize(pcd, uid, sak)
       super
-      @is_c = false
+      @model_c = false
 
       # Check if Ultralight C
-      status, _received_data = check_3des_capability
-      if status == :status_ok
+      if support_3des_auth?
         extend UltralightC
-        @is_c = true
+        @model_c = true
       end
-      resume_communication
     end
 
     def read(block_addr)
@@ -40,18 +38,22 @@ module Mifare
       return :status_ok
     end
 
-    def is_c?
-      @is_c
+    def model_c?
+      @model_c
     end
 
+    private
+
     # Check if PICC support Ultralight 3DES command
-    def check_3des_capability
+    def support_3des_auth?
       # Ask for authentication
       buffer = [CMD_3DES_AUTH, 0x00]
       status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
 
-      return :status_ok, received_data
+      resume_communication
+
+      status == :status_ok
     end
     
   end

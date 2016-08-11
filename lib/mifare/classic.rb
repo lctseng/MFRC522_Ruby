@@ -10,14 +10,22 @@ module Mifare
     CMD_RESTORE     = 0xC2  # Reads the contents of a block into the internal data register.
     CMD_TRANSFER    = 0xB0  # Writes the contents of the internal data register to a block.
 
+    # Authenticate using 6 bytes hex string
     def auth(block_addr, key = {})
       if key[:a]
-        @pcd.mifare_crypto1_authenticate(CMD_AUTH_KEY_A, block_addr, key[:a], @uid)
+        cmd = CMD_AUTH_KEY_A
+        key = key[:a]
       elsif key[:b]
-        @pcd.mifare_crypto1_authenticate(CMD_AUTH_KEY_B, block_addr, key[:b], @uid)
+        cmd = CMD_AUTH_KEY_B
+        key = key[:b]
       else
-        :status_incorrect_input
+        return :status_incorrect_input
       end
+
+      key = [key].pack('H*')
+      return :status_data_length_error if key.size != 6
+
+      @pcd.mifare_crypto1_authenticate(cmd, block_addr, key, @uid)
     end
 
     def deauth

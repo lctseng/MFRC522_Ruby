@@ -123,6 +123,11 @@ class ISO144434 < PICC
     return :status_ok, inf
   end
 
+  def halt
+    deselect
+    super
+  end
+
   private
 
   def convert_iso_baud_rate_to_pcd_setting(value)

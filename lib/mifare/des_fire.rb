@@ -1,3 +1,7 @@
+require 'openssl'
+require 'openssl/cmac'
+require 'securerandom'
+
 module Mifare
   class DESFire < ::ISO144434
 
@@ -47,6 +51,7 @@ module Mifare
       super
 
       @authed = false
+      @session_key = []
     end
 
     def deselect
