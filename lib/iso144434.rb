@@ -110,15 +110,14 @@ class ISO144434 < PICC
       @block_number ^= 1
     end
 
-    inf = []
-
     # Collect INF from chain
+    inf = []
     received_chained_data.each do |data|
       inf_position = 1
       inf_position += 1 if data[0] & 0x08 != 0 # CID present
       inf_position += 1 if data[0] & 0x04 != 0 # NAD present
 
-      inf += data[inf_position..-1]
+      inf.concat(data[inf_position..-1])
     end
 
     return :status_ok, inf

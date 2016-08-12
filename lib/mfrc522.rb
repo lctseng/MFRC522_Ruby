@@ -385,7 +385,7 @@ class MFRC522
           # ensure there's nothing weird in buffer
           if buffer.size != 6 && !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
             current_level_known_bits = 0
-            buffer = []
+            buffer = [select_level[current_cascade_level]]
             next
           end
 
@@ -570,8 +570,8 @@ class MFRC522
     # Buffer[12]: {command, block_addr, sector_key[6], uid[4]}
     #
     buffer = [command, block_addr]
-    buffer += sector_key[0..5]
-    buffer += uid[0..3]
+    buffer.concat(sector_key[0..5])
+    buffer.concat(uid[0..3])
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
 

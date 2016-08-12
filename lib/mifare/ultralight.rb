@@ -30,7 +30,7 @@ module Mifare
 
       # Page 2-15, each 4 bytes
       buffer = [CMD_WRITE, page]
-      buffer += send_data
+      buffer.concat(send_data)
 
       status = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
