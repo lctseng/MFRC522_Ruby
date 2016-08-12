@@ -1,12 +1,15 @@
 require 'pi_piper'
 
+require 'openssl_cmac'
+
 require 'picc'
 require 'iso144434'
+require 'mifare/key'
 require 'mifare/classic'
 require 'mifare/ultralight'
 require 'mifare/ultralight_c'
-require 'mifare/plus'
 require 'mifare/des_fire'
+require 'mifare/plus'
 
 include PiPiper
 
@@ -608,7 +611,7 @@ class MFRC522
 
     # Data doesn't exist, check mifare acknowledge
     return :status_error if received_data.size != 1 || valid_bits != 4 # ACK is 4 bits long
-    return :status_mifare_nack if received_data[0] != PICC_MF_ACK
+    return :status_mifare_nack, received_data[0] if received_data[0] != PICC_MF_ACK
 
     return :status_ok
   end

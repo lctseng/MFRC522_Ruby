@@ -1,56 +1,38 @@
-require 'openssl'
 require 'securerandom'
 
 module Mifare
   module UltralightC
+
+    CMD_3DES_AUTH   = 0x1A  # Ultralight C 3DES Authentication.
     
     # Using 16 bytes hex string for 3DES authentication
-    def auth(key)
-      # Convert hex to byte array
-      key = [key].pack('H*')
-      return :status_data_length_error if key.size != 16
+    def auth(auth_key)
+      raise 'Incorrect Auth Key' if auth_key.cipher_suite != 'des-ede-cbc'
+      auth_key.clear_iv
 
       # Ask for authentication
       buffer = [CMD_3DES_AUTH, 0x00]
       status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
-      return :status_unknown_data if received_data[0] != 0xAF
+      return :status_error if received_data[0] != 0xAF
 
-      # Use received data as IV for next transmission
-      next_iv = received_data[1..8]
+      challenge = auth_key.decrypt(received_data[1..-1])
+      challenge_rot = challenge.rotate
 
-      # Cipher
-      cipher = OpenSSL::Cipher.new('des-ede-cbc')
-      cipher.key = key
-      cipher.padding = 0
+      # Generate 8 bytes random number and encrypt it with rotated challenge
+      random_number = SecureRandom.random_bytes(8).bytes
+      response = auth_key.encrypt(random_number + challenge_rot)
 
-      # Decrypt challenge random number and rotate it by 8 bits
-      cipher.decrypt
-      cipher.iv = "\x00"*8
-      challenge = received_data[1..8].pack('C*')
-      challenge = cipher.update(challenge) + cipher.final
-      challenge = challenge.bytes.rotate
-
-      # Generate 8 bytes random number and encrypt the response 
-      random_number = SecureRandom.random_bytes(8)
-      cipher.encrypt
-      cipher.iv = next_iv.pack('C*')
-      response = cipher.update(random_number + challenge.pack('C*')) + cipher.final
-      response = response.bytes
-
-      # Receive verification
+      # Send challenge response
       buffer = [0xAF] + response
       status, received_data = @pcd.picc_transceive(buffer)
       return status if status != :status_ok
-      return :status_unknown_data if received_data[0] != 0x00
+      return :status_error if received_data[0] != 0x00
 
-      # Check if verification matches random_number rotated by 8 bits
-      cipher.decrypt
-      cipher.iv = response[-8..-1].pack('C*')
-      verification = received_data[1..8].pack('C*')
-      verification = cipher.update(verification) + cipher.final
+      # Check if verification matches rotated random_number
+      verification = auth_key.decrypt(received_data[1..-1])
 
-      if random_number.bytes.rotate != verification.bytes
+      if random_number.rotate != verification
         halt
         return :status_auth_failed
       end
@@ -60,7 +42,7 @@ module Mifare
 
     def write_des_key(key)
       # key should be 16 bytes long
-      bytes = [key].pack('H*').unpack('C*')
+      bytes = [key].pack('H*').bytes
       return :status_data_length_error if bytes.size != 16
 
       # Key1

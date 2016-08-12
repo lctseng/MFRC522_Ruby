@@ -3,9 +3,10 @@ class ISO144434 < PICC
   FSCI_to_FSC = { 0 => 16, 1 => 24, 2 => 32, 3 => 40, 4 => 48,
                   5 => 64, 6 => 96, 7 => 128, 8 => 256 }
 
-  CMD_RATS       = 0xE0
-  CMD_PPS        = 0xD0
-  CMD_DESELECT   = 0xC2
+  CMD_RATS              = 0xE0
+  CMD_PPS               = 0xD0
+  CMD_DESELECT          = 0xC2
+  CMD_ADDITIONAL_FRAME  = 0xAF
 
   def initialize(pcd, uid, sak)
     super
@@ -33,7 +34,7 @@ class ISO144434 < PICC
     buffer = [CMD_PPS | @cid, 0x11, (ds << 2) | dr]
     status, received_data = @pcd.picc_transceive(buffer)
     return status if status != :status_ok
-    return :status_unknown_data if received_data[0] != (0xD0 | @cid)
+    return :status_error if received_data[0] != (0xD0 | @cid)
 
     # Set PCD baud rate
     dr |= 0x08 if dr != 0 # Enable TxCRCEn on higher baud rate
@@ -57,7 +58,7 @@ class ISO144434 < PICC
       @selected = false
       return :status_ok
     else
-      return :status_unknown_data
+      return :status_error
     end
   end
 

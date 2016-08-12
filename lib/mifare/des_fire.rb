@@ -1,5 +1,3 @@
-require 'openssl'
-require 'openssl/cmac'
 require 'securerandom'
 
 module Mifare
@@ -49,35 +47,94 @@ module Mifare
 
     def initialize(pcd, uid, sak)
       super
-
-      @authed = false
-      @session_key = []
+      invalid_auth
     end
 
     def deselect
       super
-      @authed = false
+      invalid_auth
     end
 
     def get_app_ids
-      status, received_data = transceive([CMD_GET_APP_ID])
+      status, received_data = transceive([CMD_GET_APP_IDS])
       return status if status != :status_ok
+      return :status_error if received_data[0] != 0x00
 
-
+      ids = received_data[1..-1].each_slice(3).to_a
+      ids.map do |id|
+        (id[2] << 16) & (id[1] << 8) & id[0]
+      end
     end
 
     def select_app(id)
-      @authed = false
+      invalid_auth
 
+      id = [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF]
       buffer = [CMD_SELECT_APP] + id.reverse
+
+      status, received_data = transceive(buffer)
+      return status if status != :status_ok
+      return :status_error if received_data[0] != 0x00
+
+      return :status_ok
     end
 
-    def transceive(data)
-      super
+    def auth(key_number, auth_key)
+      cmd = (auth_key.type == :des) ? CMD_DES_AUTH : CMD_AES_AUTH
+      auth_key.clear_iv
+
+      # Ask for authentication
+      buffer = [cmd, key_number]
+      status, received_data = transceive(buffer)
+      return status if status != :status_ok
+      return :status_error if received_data[0] != 0xAF
+
+      challenge = auth_key.decrypt(received_data[1..-1])
+      challenge_rot = challenge.rotate
+
+      # Generate 8 bytes random number and encrypt it with rotated challenge
+      random_number = SecureRandom.random_bytes(8).bytes
+      response = auth_key.encrypt(random_number + challenge_rot)
+
+      # Send challenge response
+      buffer = [0xAF] + response
+      status, received_data = transceive(buffer)
+      return status if status != :status_ok
+      return :status_error if received_data[0] != 0x00
+
+      # Check if verification matches rotated random_number
+      verification = auth_key.decrypt(received_data[1..-1])
+
+      if random_number.rotate != verification
+        halt
+        return :status_auth_failed
+      end
+
+      # Generate session key
+      session_key = random_number[0..3] + challenge[0..3]
+
+      if auth_key.key_size > 8
+        if auth_key.cipher_suite == 'des-ede-cbc'
+          session_key.concat(random_number[4..7] + challenge[4..7])
+        elsif auth_key.cipher_suite == 'des-ede3-cbc'
+          session_key.concat(random_number[6..9] + challenge[6..9])
+          session_key.concat(random_number[12..15] + challenge[12..15])
+        elsif auth_key.cipher_suite == 'aes-128-cbc'
+          session_key.concat(random_number[12..15] + challenge[12..15])
+        end
+      end
+
+      @authed = true
+      @session_key = Key.new(auth_key.type, session_key, key_number)
+
+      return :status_ok
     end
 
-    def auth(key)
-      
+    private
+
+    def invalid_auth
+      @authed = false
+      @session_key = nil
     end
 
   end
