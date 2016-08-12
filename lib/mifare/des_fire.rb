@@ -130,6 +130,12 @@ module Mifare
       return :status_ok
     end
 
+    def transceive(cmd, send_data, cmac = nil)
+      if @authed && cmd != CMD_ADDITIONAL_FRAME
+        
+      end
+    end
+
     private
 
     def invalid_auth
