@@ -16,7 +16,7 @@ require 'openssl'
 module OpenSSL
   class CMAC
     CONST_ZERO = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".force_encoding('ASCII-8BIT')
-    CONST_RB = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x87]
+    CONST_RB = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x87].freeze
 
     # key - base 128 bit AES key
     def initialize(key)
@@ -35,7 +35,7 @@ module OpenSSL
         data8 << padding.force_encoding('ASCII-8BIT')
       end
 
-      data8[-16, 16].unpack('C*').each_with_index do |e, i| 
+      data8[-16, 16].unpack('C*').each_with_index do |e, i|
         data8[data8.size - 16 + i] = (e ^ xor_key[i]).chr
       end
 
@@ -55,12 +55,12 @@ module OpenSSL
       cipher.encrypt
       cipher.key = key
 
-      k1 = (cipher.update(CONST_ZERO)).unpack('C*')
+      k1 = cipher.update(CONST_ZERO).unpack('C*')
       xor_flag = k1[0] >= 0x80
 
       k2 = Array.new(16)
 
-      k1.each_with_index {|e, i| 
+      k1.each_with_index do |e, i|
         lsb = i == 15 ? 0 : (k1[i+1] & 0x80) / 0x80
         k1[i] = (k1[i] << 1) % 256 | lsb
         k1[i] ^= CONST_RB[i] if xor_flag
@@ -68,7 +68,7 @@ module OpenSSL
         lsb = i == 15 ? 0 : (k1[i+1] << 1 & 0x80) / 0x80
         k2[i] = (k1[i] << 1) % 256 | lsb
         k2[i] ^= CONST_RB[i] if k1[0] >= 0x80
-      }
+      end
 
       [k1, k2]
     end

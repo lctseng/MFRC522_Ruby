@@ -1,7 +1,5 @@
 class ISO144434 < PICC
-
-  FSCI_to_FSC = { 0 => 16, 1 => 24, 2 => 32, 3 => 40, 4 => 48,
-                  5 => 64, 6 => 96, 7 => 128, 8 => 256 }
+  FSCI_to_FSC = [16, 24, 32, 40, 48, 64, 96, 128, 256]
 
   CMD_RATS              = 0xE0
   CMD_PPS               = 0xD0
@@ -25,40 +23,33 @@ class ISO144434 < PICC
   def select
     # Send RATS (Request for Answer To Select)
     buffer = [CMD_RATS, 0x50 | @cid]
-    status, received_data = @pcd.picc_transceive(buffer)
-    return status if status != :status_ok
+    received_data = @pcd.picc_transceive(buffer)
 
     dr, ds = process_ats(received_data)
 
     # Send PPS (Protocol and Parameter Selection Request)
     buffer = [CMD_PPS | @cid, 0x11, (ds << 2) | dr]
-    status, received_data = @pcd.picc_transceive(buffer)
-    return status if status != :status_ok
-    return :status_error if received_data[0] != (0xD0 | @cid)
+    received_data = @pcd.picc_transceive(buffer)
+    raise UnexpectedDataError, 'Incorrect response' if received_data[0] != (0xD0 | @cid)
 
     # Set PCD baud rate
-    dr |= 0x08 if dr != 0 # Enable TxCRCEn on higher baud rate
-    ds |= 0x08 if ds != 0
-    @pcd.write_spi(MFRC522::TxModeReg, (dr << 4))
-    @pcd.write_spi(MFRC522::RxModeReg, (ds << 4))
+    @pcd.transceiver_baud_rate(:tx, dr)
+    @pcd.transceiver_baud_rate(:rx, ds)
 
     @block_number = 0
     @selected = true
-
-    return :status_ok
   end
 
   # Send S(DESELECT)
   def deselect
     buffer = [CMD_DESELECT]
-    status, received_data = @pcd.picc_transceive(buffer)
-    return status if status != :status_ok
+    received_data = @pcd.picc_transceive(buffer)
 
     if received_data[0] & 0xF7 == CMD_DESELECT
       @selected = false
-      return :status_ok
+      true
     else
-      return :status_error
+      false
     end
   end
 
@@ -69,7 +60,7 @@ class ISO144434 < PICC
     pcb = 0x02
 
     # Send chained data
-    while !chained_data.empty?
+    until chained_data.empty?
       pcb &= 0xEF # reset chaining indicator
       pcb |= 0x10 if chained_data.size > 1
       pcb |= @block_number
@@ -78,9 +69,8 @@ class ISO144434 < PICC
       buffer = [pcb] + data
 
       finished = false
-      while !finished
-        status, received_data = handle_wtx(buffer)
-        return status if status != :status_ok
+      until finished
+        received_data = handle_wtx(buffer)
 
         r_pcb = received_data[0]
 
@@ -100,8 +90,7 @@ class ISO144434 < PICC
     # Receive chained data
     while r_pcb & 0x10 != 0
       ack = 0xA2 | @block_number
-      status, received_data = handle_wtx([ack])
-      return status if status != :status_ok
+      received_data = handle_wtx([ack])
 
       r_pcb = received_data[0]
 
@@ -120,7 +109,7 @@ class ISO144434 < PICC
       inf.concat(data[inf_position..-1])
     end
 
-    return :status_ok, inf
+    inf
   end
 
   def halt
@@ -135,7 +124,7 @@ class ISO144434 < PICC
     y = (value >> 1) & 0x01
     z = value & 0x01
 
-    ((x | y) << 1) + (x | ( ~y & z ))
+    ((x | y) << 1) + (x | (~y & z))
   end
 
   # Gether information from ATS (Answer to Select)
@@ -182,7 +171,7 @@ class ISO144434 < PICC
     if y1 & 0x04 != 0
       position += 1
       tc = ats[position]
-      
+
       @support_cid = true if tc & 0x02 != 0
       @support_nad = true if tc & 0x01 != 0
     end
@@ -195,11 +184,12 @@ class ISO144434 < PICC
 
   def handle_wtx(data)
     3.times do
-      status, received_data = @pcd.picc_transceive(data)
-      return status if status != :status_ok && status != :status_picc_timeout
+      begin
+        received_data = @pcd.picc_transceive(data)
+      rescue CommunicationError => e
+        raise e unless e.is_a? PICCTimeoutError
 
-      # Try sending NAK when timeout
-      if status == :status_picc_timeout
+        # Try sending NAK when timeout
         nak = 0xB2 | @block_number
         data = [nak]
         next
@@ -221,11 +211,9 @@ class ISO144434 < PICC
         # Set timer back to FWT
         @pcd.internal_timer(@fwt)
 
-        return :status_ok, received_data
+        return received_data
       end
     end
-
-    return :status_picc_timeout
+    raise PICCTimeoutError
   end
-
 end

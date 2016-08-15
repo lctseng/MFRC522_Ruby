@@ -1,5 +1,4 @@
 class PICC
-
   attr_reader :uid
   attr_reader :sak
 
@@ -11,12 +10,10 @@ class PICC
   end
 
   def resume_communication
-    @pcd.reestablish_picc_communication(@uid)
+    @pcd.reestablish_picc_communication(@uid) && @halted = false
   end
 
   def halt
-    @halted = true
-    @pcd.picc_halt
+    @pcd.picc_halt && @halted = true
   end
-  
 end

@@ -1,6 +1,5 @@
 module Mifare
   class Ultralight < ::PICC
-
     CMD_READ        = 0x30  # Reads 4 pages(16 bytes) from the PICC.
     CMD_WRITE       = 0xA2  # Writes 1 page(4 bytes) to the PICC.
     CMD_3DES_AUTH   = 0x1A  # Ultralight C 3DES Authentication.
@@ -19,23 +18,18 @@ module Mifare
     def read(block_addr)
       buffer = [CMD_READ, block_addr]
 
-      status, received_data = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
-
-      return :status_ok, received_data
+      @pcd.picc_transceive(buffer)
     end
 
     def write(page, send_data)
-      return :status_data_length_error if send_data.size != 4
+      if send_data.size != 4
+        raise UnexpectedDataError, "Expect 4 bytes data, got: #{send_data.size} byte"
+      end
 
-      # Page 2-15, each 4 bytes
       buffer = [CMD_WRITE, page]
       buffer.concat(send_data)
 
-      status = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
-
-      return :status_ok
+      @pcd.picc_transceive(buffer)
     end
 
     def model_c?
@@ -48,13 +42,17 @@ module Mifare
     def support_3des_auth?
       # Ask for authentication
       buffer = [CMD_3DES_AUTH, 0x00]
-      status, received_data = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
+
+      begin
+        @pcd.picc_transceive(buffer)
+        result = true
+      rescue CommunicationError
+        result = false
+      end
 
       resume_communication
 
-      status == :status_ok
+      result
     end
-    
   end
 end

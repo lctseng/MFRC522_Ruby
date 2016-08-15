@@ -10,4 +10,3 @@ Gem::Specification.new do |s|
   s.license     = 'MIT'
   s.add_runtime_dependency 'pi_piper', '~> 2.0.0', '>= 2.0.0'
 end
-

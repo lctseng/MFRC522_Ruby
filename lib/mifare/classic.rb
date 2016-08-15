@@ -1,6 +1,5 @@
 module Mifare
   class Classic < ::PICC
-
     CMD_AUTH_KEY_A  = 0x60  # Perform authentication with Key A
     CMD_AUTH_KEY_B  = 0x61  # Perform authentication with Key B
     CMD_READ        = 0x30  # Reads one 16 byte block from the authenticated sector of the PICC.
@@ -12,18 +11,22 @@ module Mifare
 
     # Authenticate using 6 bytes hex string
     def auth(block_addr, key = {})
+      if key[:a].nil? && key[:b].nil?
+        raise UnexpectedDataError, 'Missing key data'
+      end
+
       if key[:a]
         cmd = CMD_AUTH_KEY_A
         key = key[:a]
-      elsif key[:b]
+      else
         cmd = CMD_AUTH_KEY_B
         key = key[:b]
-      else
-        return :status_incorrect_input
       end
 
       key = [key].pack('H*')
-      return :status_data_length_error if key.size != 6
+      if key.size != 6
+        raise UnexpectedDataError, "Expect 6 bytes auth key, got: #{key.size} byte"
+      end
 
       @pcd.mifare_crypto1_authenticate(cmd, block_addr, key, @uid)
     end
@@ -35,43 +38,30 @@ module Mifare
     def read(block_addr)
       buffer = [CMD_READ, block_addr]
 
-      status, received_data = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
-
-      return :status_ok, received_data
+      @pcd.picc_transceive(buffer)
     end
 
     def write(block_addr, send_data)
-      return :status_data_length_error if send_data.size != 16
+      if send_data.size != 16
+        raise UnexpectedDataError, "Expect 16 bytes data, got: #{send_data.size} byte"
+      end
 
       buffer = [CMD_WRITE, block_addr]
 
       # Ask PICC if we can write to block_addr
-      status = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
+      @pcd.picc_transceive(buffer)
 
       # Then start transfer our data
-      status = @pcd.picc_transceive(send_data)
-      return status if status != :status_ok
-
-      return :status_ok
+      @pcd.picc_transceive(send_data)
     end
 
     def read_value(block_addr)
-      status, received_data = read(block_addr)
-      return status if status != :status_ok
-    
-      value = (received_data[3] << 24) +
-              (received_data[2] << 16) +
-              (received_data[1] << 8) +
-              received_data[0]
-    
-      return :status_ok, value
+      received_data = read(block_addr)
+
+      convert_integer(received_data)
     end
 
     def write_value(block_addr, value)
-      return :status_data_length_error if value.size > 4
-
       # Value block format
       #
       # byte 0..3:   32 bit value in little endian
@@ -81,11 +71,13 @@ module Mifare
       # byte 13:     copy of byte 12 with inverted bits (aka. XOR 255)
       # byte 14:     copy of byte 12
       # byte 15:     copy of byte 13
+      value = convert_integer(value)
+
       buffer = []
-      buffer[0]  = value & 0xFF
-      buffer[1]  = (value >> 8) & 0xFF
-      buffer[2]  = (value >> 16) & 0xFF
-      buffer[3]  = (value >> 24) & 0xFF
+      buffer[0]  = value[0]
+      buffer[1]  = value[1]
+      buffer[2]  = value[2]
+      buffer[3]  = value[3]
       buffer[4]  = ~buffer[0]
       buffer[5]  = ~buffer[1]
       buffer[6]  = ~buffer[2]
@@ -121,36 +113,51 @@ module Mifare
     def transfer(block_addr)
       buffer = [CMD_TRANSFER, block_addr]
 
-      status = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
-
-      return :status_ok
+      @pcd.picc_transceive(buffer)
     end
 
     private
 
     # Helper for increment, decrement, and restore command
     def two_step(command, block_addr, value)
-      return :status_data_length_error if value.size > 4
-
       buffer = [command, block_addr]
-      send_data = [ # Split integer into array of bytes
-        value & 0xFF,
-        (value >> 8) & 0xFF,
-        (value >> 16) & 0xFF,
-        (value >> 24) & 0xFF
-      ]
-      
+      send_data = convert_integer(value)
+
       # Ask PICC if we can write to block_addr
-      status = @pcd.picc_transceive(buffer)
-      return status if status != :status_ok
+      @pcd.picc_transceive(buffer)
 
       # Then start transfer our data
-      status = @pcd.picc_transceive(send_data, true) # Accept timeout
-      return status if status != :status_ok
-
-      return :status_ok
+      @pcd.picc_transceive(send_data, true) # Accept timeout
     end
 
+    def convert_integer(number)
+      if number.is_a?(Array)
+        if number.size != 4
+          raise UnexpectedDataError, 'Expect 4 bytes signed integer'
+        end
+
+        sign = (number[3] & 0x80 != 0) ? -1 : 1
+
+        number = ((number[3] & 0x7F) << 24) +
+                 (number[2] << 16) +
+                 (number[1] << 8) +
+                 number[0]
+
+        number *= sign
+      else
+        if number.abs >= (1 << 31)
+          raise UnexpectedDataError, 'Expect 4 bytes signed integer'
+        end
+
+        # Manually convert integer
+        sign = (number < 0) ? 1 : 0
+        number = number.abs
+
+        [number & 0xFF,
+        (number >> 8) & 0xFF,
+        (number >> 16) & 0xFF,
+        (number >> 24) & 0x7F | (sign << 7)]
+      end
+    end
   end
 end

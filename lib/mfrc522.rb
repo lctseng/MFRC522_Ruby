@@ -1,9 +1,13 @@
 require 'pi_piper'
 
-require 'openssl_cmac'
+require 'openssl'
+require 'securerandom'
 
+require 'openssl_cmac'
 require 'picc'
 require 'iso144434'
+require 'exceptions'
+
 require 'mifare/key'
 require 'mifare/classic'
 require 'mifare/ultralight'
@@ -113,12 +117,6 @@ class MFRC522
 
     soft_reset # Perform software reset
 
-    write_spi(TModeReg, 0x87) # Start timer by setting TAuto=1, and higher part of TPrescalerReg
-    write_spi(TPrescalerReg, 0xFF) # Set lower part of TPrescalerReg, and results in 302us timer (f_timer = 13.56 MHz / (2*TPreScaler+1))
-    
-    write_spi(TxASKReg, 0x40) # Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
-    write_spi(ModeReg, 0x3D) # Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
-
     pcd_config_reset # default 256 ticks on 302us timer defines 77.33ms per timer cycle
 
     antenna_on # Turn antenna on. They were disabled by the reset.
@@ -128,20 +126,28 @@ class MFRC522
   def soft_reset
     write_spi(CommandReg, PCD_SoftReset)
     sleep 1.0 / 20.0 # wait 50ms
+
+    write_spi(TModeReg, 0x87) # Start timer by setting TAuto=1, and higher part of TPrescalerReg
+    write_spi(TPrescalerReg, 0xFF) # Set lower part of TPrescalerReg, and results in 302us timer (f_timer = 13.56 MHz / (2*TPreScaler+1))
+    
+    write_spi(TxASKReg, 0x40) # Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
+    write_spi(ModeReg, 0x3D) # Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
   end
 
   # Reset PCD config to default
   def pcd_config_reset
     # Clear ValuesAfterColl bit
     write_spi_clear_bitmask(CollReg, 0x80)
-    # Reset picc baud rate to 106 kBd
-    write_spi(TxModeReg, 0x00)
-    write_spi(RxModeReg, 0x00)
-    # Set timer to default value
+
+    # Reset transceiver baud rate to 106 kBd
+    transceiver_baud_rate(:tx, 0)
+    transceiver_baud_rate(:rx, 0)
+
+    # Set PCD timer value for 302us default timer
     internal_timer(@timer)
   end
 
-  # Set PCD timer value for 302us default timer
+  # Control transceive timeout value
   def internal_timer(timer = nil)
     if timer
       write_spi(TReloadRegH, (timer >> 8) & 0xFF)
@@ -150,45 +156,18 @@ class MFRC522
     (read_spi(TReloadRegH) << 8) | read_spi(TReloadRegL)
   end
 
-  # Read from SPI communication
-  def read_spi(reg)
-    output = 0
-    PiPiper::Spi.begin do |spi|
-      spi.chip_select_active_low(true)
-      spi.bit_order Spi::MSBFIRST
-      spi.clock @spi_spd
+  # Control transceiver baud rate
+  # value = 0: 106kBd, 1: 212kBd, 2: 424kBd, 3: 848kBd
+  def transceiver_baud_rate(direction, value = nil)
+    reg = {tx: TxModeReg, rx: RxModeReg}
 
-      spi.chip_select(@spi_chip) do
-        spi.write((reg << 1) & 0x7E | 0x80)
-        output = spi.read
-      end
+    if value
+      value <<= 4
+      value |= 0x80 if value != 0
+      write_spi(reg.fetch(direction), value)
     end
-    output
-  end
 
-  # Write to SPI communication
-  def write_spi(reg, values)
-    PiPiper::Spi.begin do |spi|
-      spi.chip_select_active_low(true)
-      spi.bit_order Spi::MSBFIRST
-      spi.clock @spi_spd
-
-      spi.chip_select(@spi_chip) do
-        spi.write((reg << 1) & 0x7E, *values)
-      end
-    end
-  end
-
-  # Helper for setting bits by mask
-  def write_spi_set_bitmask(reg, mask)
-    value = read_spi(reg)
-    write_spi(reg, value | mask)
-  end
-
-  # Helper for clearing bits by mask
-  def write_spi_clear_bitmask(reg, mask)
-    value = read_spi(reg)
-    write_spi(reg, value & (~mask))
+    (read_spi(reg.fetch(direction)) >> 4) & 0x07
   end
 
   # Turn antenna on
@@ -211,105 +190,6 @@ class MFRC522
     (read_spi(RFCfgReg) & 0x70) >> 4
   end
 
-  # Calculate CRC using MFRC522's built-in coprocessor
-  def calculate_crc(data)
-    write_spi(CommandReg, PCD_Idle)               # Stop any active command.
-    write_spi(DivIrqReg, 0x04)                    # Clear the CRCIRq interrupt request bit
-    write_spi_set_bitmask(FIFOLevelReg, 0x80)     # FlushBuffer = 1, FIFO initialization
-    write_spi(FIFODataReg, data)                  # Write data to the FIFO
-    write_spi(CommandReg, PCD_CalcCRC)            # Start the calculation
-
-    # Wait for the command to complete
-    i = 5000
-    loop do
-      irq = read_spi(DivIrqReg)
-      break if (irq & 0x04) != 0
-      return :status_pcd_timeout if i == 0
-      i -= 1
-    end
-
-    write_spi(CommandReg, PCD_Idle)               # Stop calculating CRC for new content in the FIFO.
-
-    result = []
-    result << read_spi(CRCResultRegL)
-    result << read_spi(CRCResultRegH)
-    
-    return :status_ok, result
-  end
-
-  # Calculate and append CRC to data
-  def append_crc(data)
-    status, crc = calculate_crc(data)
-    return status if status != :status_ok
-    data << crc[0] << crc[1]
-
-    return :status_ok, data
-  end
-
-  # Check CRC using MFRC522's built-in coprocessor
-  def check_crc(data)
-    status, crc = calculate_crc(data[0..-3])
-    return status if status != :status_ok
-    return :status_crc_error if data[-2] != crc[0] || data[-1] != crc[1]
-
-    return :status_ok
-  end
-
-  # PCD transceive helper
-  def communicate_with_picc(command, send_data, framing_bit = 0, check_crc = false)
-    wait_irq = 0x00
-    wait_irq = 0x10 if command == PCD_MFAuthent
-    wait_irq = 0x30 if command == PCD_Transceive
-
-    write_spi(CommandReg, PCD_Idle)               # Stop any active command.
-    write_spi(ComIrqReg, 0x7F)                    # Clear all seven interrupt request bits
-    write_spi_set_bitmask(FIFOLevelReg, 0x80)     # FlushBuffer = 1, FIFO initialization
-    write_spi(FIFODataReg, send_data)             # Write sendData to the FIFO
-    write_spi(BitFramingReg, framing_bit)         # Bit adjustments
-    write_spi(CommandReg, command)                # Execute the command
-    if command == PCD_Transceive
-      write_spi_set_bitmask(BitFramingReg, 0x80)  # StartSend=1, transmission of data starts
-    end
-
-    # Wait for the command to complete
-    i = 2000
-    loop do
-      irq = read_spi(ComIrqReg)
-      break if (irq & wait_irq) != 0
-      return :status_picc_timeout if (irq & 0x01) != 0
-      return :status_pcd_timeout if i == 0
-      i -= 1
-    end
-
-    # Check for error
-    error = read_spi(ErrorReg)
-    return :status_error if (error & 0x13) != 0 # BufferOvfl ParityErr ProtocolErr
-
-    # Receiving data
-    received_data = []
-    data_length = read_spi(FIFOLevelReg)
-    while data_length > 0 do
-      data = read_spi(FIFODataReg)
-      received_data << data
-      data_length -=1
-    end
-    valid_bits = read_spi(ControlReg) & 0x07
-
-    # Check CRC if requested
-    if !received_data.empty? && check_crc
-      return :status_mifare_nack if received_data.count == 1 && valid_bits == 4
-      return :status_crc_error if received_data.count < 2 || valid_bits != 0
-
-      status = check_crc(received_data)
-      return status if status != :status_ok
-    end
-
-    status = :status_ok
-    status = :status_collision if (error & 0x08) != 0 # CollErr
-
-    return status, received_data, valid_bits
-  end
-
   # Wakes PICC from HALT or IDLE to ACTIVE state
   #
   # Accept PICC_REQA and PICC_WUPA command
@@ -318,28 +198,18 @@ class MFRC522
 
     status, _received_data, valid_bits = communicate_with_picc(PCD_Transceive, picc_command, 0x07)
 
-    return status if status != :status_ok
-    return :status_unknown_data if valid_bits != 0 # REQA or WUPA command return 16 bits(full byte)
-
-    return :status_ok
+    status == :status_ok && valid_bits != 0 # REQA or WUPA command return 16 bits(full byte)
   end
 
   # Instruct PICC in ACTIVE state go to HALT state
   def picc_halt
-    buffer = [PICC_HLTA, 0]
-
-    # Calculate CRC and append it into buffer
-    status, buffer = append_crc(buffer)
-    return status if status != :status_ok
+    buffer = append_crc([PICC_HLTA, 0])
 
     status, _received_data, _valid_bits = communicate_with_picc(PCD_Transceive, buffer)
 
     # PICC in HALT state will not respond
     # If PICC sent reply, means it didn't acknowledge the command we sent
-    return :status_ok if status == :status_picc_timeout
-    return :status_error if status == :status_ok
-
-    return status
+    status == :status_picc_timeout
   end
 
   # Select PICC for further communication
@@ -371,11 +241,11 @@ class MFRC522
     #                  3       uid6  uid7  uid8  uid9
     pcd_config_reset
 
-    select_level = [PICC_SEL_CL1, PICC_SEL_CL2, PICC_SEL_CL3]
+    cascade_levels = [PICC_SEL_CL1, PICC_SEL_CL2, PICC_SEL_CL3]
     uid = []
 
-    for current_cascade_level in 0..2
-      buffer = [select_level[current_cascade_level]]
+    cascade_levels.each do |cascade_level|
+      buffer = [cascade_level]
       current_level_known_bits = 0
       received_data = []
       valid_bits = 0
@@ -385,7 +255,7 @@ class MFRC522
           # ensure there's nothing weird in buffer
           if buffer.size != 6 && !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
             current_level_known_bits = 0
-            buffer = [select_level[current_cascade_level]]
+            buffer = [cascade_level]
             next
           end
 
@@ -394,8 +264,7 @@ class MFRC522
           buffer << (buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]) # Block Check Character
 
           # Append CRC to buffer
-          status, buffer = append_crc(buffer)
-          return status if status != :status_ok
+          buffer = append_crc(buffer)
         else
           tx_last_bits = current_level_known_bits % 8
           uid_full_byte = current_level_known_bits / 8
@@ -407,7 +276,6 @@ class MFRC522
 
         # Try to fetch UID
         status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, buffer, framing_bit)
-        return status if status != :status_ok
 
         # Append received UID into buffer if not doing full select
         buffer = buffer[0...all_full_byte] + received_data[0..3] if current_level_known_bits < 32
@@ -416,10 +284,12 @@ class MFRC522
         if status == :status_collision
           collision = read_spi(CollReg)
 
-          return :status_collision if (collision & 0x20) != 0 # CollPosNotValid - We don't know where collision happened
+          # CollPosNotValid - We don't know where collision happened
+          raise CollisionError if (collision & 0x20) != 0
+          
           collision_position = collision & 0x1F
           collision_position = 32 if collision_position == 0 # Values 0-31, 0 means bit 32
-          return :status_internal_error if collision_position <= current_level_known_bits
+          raise CollisionError if collision_position <= current_level_known_bits
         
           # Mark the bit
           current_level_known_bits = collision_position
@@ -430,7 +300,7 @@ class MFRC522
           break if current_level_known_bits >= 32
           current_level_known_bits = 32 # We've already known all bits, loop again for a complete select
         else
-          return status
+          raise CommunicationError, status
         end 
       end
 
@@ -442,71 +312,25 @@ class MFRC522
       uid << buffer[3] << buffer[4] << buffer[5]
 
       # Check the result of full select
-      return :status_sak_error if received_data.count != 3 || valid_bits != 0 # Select Acknowledge is 1 byte + CRC_A
-
-      status = check_crc(received_data)
-      return status if status != :status_ok
+      # Select Acknowledge is 1 byte + CRC_A
+      raise IncorrectCRCError unless check_crc(received_data)
+      raise UnexpectedDataError, 'Unknown SAK format' if received_data.size != 3 || valid_bits != 0 
 
       sak = received_data[0]
-
-      break if (received_data[0] & 0x04) == 0 # No more cascade level
+      break if (sak & 0x04) == 0 # No more cascade level
     end
 
-    return :status_ok, uid, sak
+    uid, sak
   end
 
-  # Trying to wake it up again
+  # Trying to restart picc
   def reestablish_picc_communication(uid)
-    status = picc_halt
-    return status if status != :status_ok
+    return false unless picc_halt
+    return false unless picc_request(PICC_WUPA)
 
-    status = picc_request(PICC_WUPA)
-    return status if status != :status_ok
+    status, new_uid, _new_sak = picc_select
 
-    status, new_uid, new_sak = picc_select
-    return status if status != :status_ok
-
-    if uid == new_uid
-      return :status_ok
-    else
-      return :status_different_card_detected
-    end
-  end
-
-  # Lookup error message
-  def error_type(error)
-    case error
-    when :status_ok
-      'It worked'
-    when :status_pcd_timeout
-      'Reader did not responding'
-    when :status_picc_timeout
-      'Tag did not responding'
-    when :status_crc_error
-      'CRC check failed'
-    when :status_mifare_nack
-      'Tag sent negative acknowledge'
-    when :status_collision
-      'Multiple tags detected'
-    when :status_unknown_data
-      'Incorrect data received'
-    when :status_internal_error
-      'Something went wrong but it shouldnt happen'
-    when :status_sak_error
-      'Incorrect select acknowledge'
-    when :status_auth_failed
-      'Authentication failed'
-    when :status_data_length_error
-      'Incorrect input data length'
-    when :status_incorrect_input
-      'Incorrect input'
-    when :status_different_card_detected
-      'Different card detected while reselecting'
-    when :status_error
-      'Something went wrong'
-    else
-      'Unknown error type'
-    end
+    status == :status_ok && uid == new_uid
   end
 
   # Lookup PICC name using sak
@@ -566,19 +390,15 @@ class MFRC522
   # Checks datasheets for block address numbering of your PICC
   #
   def mifare_crypto1_authenticate(command, block_addr, sector_key, uid)
-    #
     # Buffer[12]: {command, block_addr, sector_key[6], uid[4]}
-    #
     buffer = [command, block_addr]
     buffer.concat(sector_key[0..5])
     buffer.concat(uid[0..3])
 
-    status, _received_data, _valid_bits = communicate_with_picc(PCD_MFAuthent, buffer)
+    communicate_with_picc(PCD_MFAuthent, buffer)
 
-    return status if status != :status_ok
-    return :status_auth_failed if (read_spi(Status2Reg) & 0x08) == 0
-
-    return :status_ok
+    # Check MFCrypto1On bit
+    (read_spi(Status2Reg) & 0x08) != 0
   end
 
   # Stop Mifare encrypted communication
@@ -589,31 +409,152 @@ class MFRC522
   # Helper that append CRC to buffer and check CRC or Mifare acknowledge
   def picc_transceive(send_data, accept_timeout = false)
     # Append CRC
-    status, send_data = append_crc(send_data)
-    return status if status != :status_ok
+    send_data = append_crc(send_data)
 
     puts "Sending Data: #{send_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
 
     # Transfer data
     status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, send_data)
-    return :status_ok if status == :status_picc_timeout && accept_timeout
-    return status if status != :status_ok
+    return [] if status == :status_picc_timeout && accept_timeout
+    raise PICCTimeoutError if status == :status_picc_timeout
+    raise CommunicationError, status if status != :status_ok
 
     puts "Received Data: #{received_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
 
     # Data exists, check CRC and return
     if received_data.size > 1
-      return :status_crc_error if received_data.size < 3 || valid_bits != 0
+      raise IncorrectCRCError unless check_crc(received_data)
 
-      status = check_crc(received_data)
-      return status, received_data[0..-3]
+      return received_data[0..-3]
     end
 
-    # Data doesn't exist, check mifare acknowledge
-    return :status_error if received_data.size != 1 || valid_bits != 4 # ACK is 4 bits long
-    return :status_mifare_nack, received_data[0] if received_data[0] != PICC_MF_ACK
+    raise UnexpectedDataError, 'Incorrect Mifare ACK format' if received_data.size != 1 || valid_bits != 4 # ACK is 4 bits long
+    raise MifareNakError, received_data[0] if received_data[0] != PICC_MF_ACK
 
-    return :status_ok
+    received_data
+  end
+
+  private
+
+  # Read from SPI communication
+  def read_spi(reg)
+    output = 0
+    PiPiper::Spi.begin do |spi|
+      spi.chip_select_active_low(true)
+      spi.bit_order Spi::MSBFIRST
+      spi.clock @spi_spd
+
+      spi.chip_select(@spi_chip) do
+        spi.write((reg << 1) & 0x7E | 0x80)
+        output = spi.read
+      end
+    end
+    output
+  end
+
+  # Write to SPI communication
+  def write_spi(reg, values)
+    PiPiper::Spi.begin do |spi|
+      spi.chip_select_active_low(true)
+      spi.bit_order Spi::MSBFIRST
+      spi.clock @spi_spd
+
+      spi.chip_select(@spi_chip) do
+        spi.write((reg << 1) & 0x7E, *values)
+      end
+    end
+  end
+
+  # Helper for setting bits by mask
+  def write_spi_set_bitmask(reg, mask)
+    value = read_spi(reg)
+    write_spi(reg, value | mask)
+  end
+
+  # Helper for clearing bits by mask
+  def write_spi_clear_bitmask(reg, mask)
+    value = read_spi(reg)
+    write_spi(reg, value & (~mask))
+  end
+
+  # PCD transceive helper
+  def communicate_with_picc(command, send_data, framing_bit = 0)
+    wait_irq = 0x00
+    wait_irq = 0x10 if command == PCD_MFAuthent
+    wait_irq = 0x30 if command == PCD_Transceive
+
+    write_spi(CommandReg, PCD_Idle)               # Stop any active command.
+    write_spi(ComIrqReg, 0x7F)                    # Clear all seven interrupt request bits
+    write_spi_set_bitmask(FIFOLevelReg, 0x80)     # FlushBuffer = 1, FIFO initialization
+    write_spi(FIFODataReg, send_data)             # Write sendData to the FIFO
+    write_spi(BitFramingReg, framing_bit)         # Bit adjustments
+    write_spi(CommandReg, command)                # Execute the command
+    if command == PCD_Transceive
+      write_spi_set_bitmask(BitFramingReg, 0x80)  # StartSend=1, transmission of data starts
+    end
+
+    # Wait for the command to complete
+    i = 2000
+    loop do
+      irq = read_spi(ComIrqReg)
+      break if (irq & wait_irq) != 0
+      return :status_picc_timeout if (irq & 0x01) != 0
+      return :status_pcd_timeout if i == 0
+      i -= 1
+    end
+
+    # Check for error
+    error = read_spi(ErrorReg)
+    return :status_error if (error & 0x13) != 0 # BufferOvfl ParityErr ProtocolErr
+
+    # Receiving data
+    received_data = []
+    data_length = read_spi(FIFOLevelReg)
+    while data_length > 0 do
+      data = read_spi(FIFODataReg)
+      received_data << data
+      data_length -=1
+    end
+    valid_bits = read_spi(ControlReg) & 0x07
+
+    status = :status_ok
+    status = :status_collision if (error & 0x08) != 0 # CollErr
+
+    return status, received_data, valid_bits
+  end
+
+  # Calculate CRC using MFRC522's built-in coprocessor
+  def calculate_crc(data)
+    write_spi(CommandReg, PCD_Idle)               # Stop any active command.
+    write_spi(DivIrqReg, 0x04)                    # Clear the CRCIRq interrupt request bit
+    write_spi_set_bitmask(FIFOLevelReg, 0x80)     # FlushBuffer = 1, FIFO initialization
+    write_spi(FIFODataReg, data)                  # Write data to the FIFO
+    write_spi(CommandReg, PCD_CalcCRC)            # Start the calculation
+
+    # Wait for the command to complete
+    i = 5000
+    loop do
+      irq = read_spi(DivIrqReg)
+      break if (irq & 0x04) != 0
+      raise PCDTimeoutError, 'Error calculating CRC' if i == 0
+      i -= 1
+    end
+
+    write_spi(CommandReg, PCD_Idle)               # Stop calculating CRC for new content in the FIFO.
+
+    [read_spi(CRCResultRegL), read_spi(CRCResultRegH)]
+  end
+
+  # Calculate and append CRC to data
+  def append_crc(data)
+    data.concat(calculate_crc(data))
+  end
+
+  # Check CRC using MFRC522's built-in coprocessor
+  def check_crc(data)
+    raise UnexpectedDataError, 'Data too short for CRC check' if data.size < 3
+
+    data[-2..-1] == calculate_crc(data[0..-3])
   end
 
 end

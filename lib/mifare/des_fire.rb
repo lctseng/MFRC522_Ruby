@@ -1,13 +1,10 @@
-require 'securerandom'
-
 module Mifare
   class DESFire < ::ISO144434
-
     ERROR_CODE = { 0x0C => :no_changes }
 
     # Security Related Commands
-    CMD_DES_AUTH                  = 0x1A
-    CMD_AES_AUTH                  = 0xAA
+    CMD_DES_AUTH                  = 0x1A # Authenticate with DES, 2K3DES, 3K3DES key
+    CMD_AES_AUTH                  = 0xAA # Authenticate with AES-128 key
     CMD_GET_KEY_SETTING           = 0x45 # Gets information on the PICC and application master key settings. In addition it returns the maximum number of keys which can be stored within the selected application.
     CMD_CHANGE_KEY_SETTING        = 0x54 # Changes the master key settings on PICC and application level.
     CMD_GET_KEY_VERSION           = 0x64 # Reads out the current key version of any key stored on the PICC.
@@ -56,9 +53,7 @@ module Mifare
     end
 
     def get_app_ids
-      status, received_data = transceive([CMD_GET_APP_IDS])
-      return status if status != :status_ok
-      return :status_error if received_data[0] != 0x00
+      received_data = transceive([CMD_GET_APP_IDS])
 
       ids = received_data[1..-1].each_slice(3).to_a
       ids.map do |id|
@@ -72,11 +67,7 @@ module Mifare
       id = [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF]
       buffer = [CMD_SELECT_APP] + id.reverse
 
-      status, received_data = transceive(buffer)
-      return status if status != :status_ok
-      return :status_error if received_data[0] != 0x00
-
-      return :status_ok
+      transceive(buffer)
     end
 
     def auth(key_number, auth_key)
@@ -85,9 +76,7 @@ module Mifare
 
       # Ask for authentication
       buffer = [cmd, key_number]
-      status, received_data = transceive(buffer)
-      return status if status != :status_ok
-      return :status_error if received_data[0] != 0xAF
+      received_data = transceive(buffer)
 
       challenge = auth_key.decrypt(received_data[1..-1])
       challenge_rot = challenge.rotate
@@ -98,16 +87,14 @@ module Mifare
 
       # Send challenge response
       buffer = [0xAF] + response
-      status, received_data = transceive(buffer)
-      return status if status != :status_ok
-      return :status_error if received_data[0] != 0x00
+      received_data = transceive(buffer)
 
       # Check if verification matches rotated random_number
       verification = auth_key.decrypt(received_data[1..-1])
 
       if random_number.rotate != verification
         halt
-        return :status_auth_failed
+        return @authed = false
       end
 
       # Generate session key
@@ -124,16 +111,16 @@ module Mifare
         end
       end
 
-      @authed = true
       @session_key = Key.new(auth_key.type, session_key, key_number)
-
-      return :status_ok
+      @authed = true
     end
 
     def transceive(cmd, send_data, cmac = nil)
       if @authed && cmd != CMD_ADDITIONAL_FRAME
         
       end
+
+
     end
 
     private
@@ -142,6 +129,5 @@ module Mifare
       @authed = false
       @session_key = nil
     end
-
   end
 end

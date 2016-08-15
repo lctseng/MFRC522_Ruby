@@ -1,8 +1,5 @@
-require 'openssl'
-
 module Mifare
   class Key
-
     attr_reader :type
     attr_reader :cipher_suite
     attr_reader :key_size
@@ -79,7 +76,7 @@ module Mifare
         elsif @key_size == 24
           @cipher_suite = 'des-ede3-cbc'
         end
-      
+
       elsif key_type == :aes
         raise 'Incorrect key length' if @key_size != 16
 
@@ -99,8 +96,8 @@ module Mifare
     def store_key_version(key, version)
       mask = 0x80
       key.map.with_index do |key_byte, index|
-        if index < 8
-          parity = (version & (mask >> index) != 0) ? 0x01 : 0x00
+        if (index < 8) && (version & (mask >> index) != 0)
+          parity = 1
         else
           parity = 0
         end
