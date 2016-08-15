@@ -1,7 +1,5 @@
 module Mifare
   class DESFire < ::ISO144434
-    ERROR_CODE = { 0x0C => :no_changes }
-
     # Security Related Commands
     CMD_DES_AUTH                  = 0x1A # Authenticate with DES, 2K3DES, 3K3DES key
     CMD_AES_AUTH                  = 0xAA # Authenticate with AES-128 key
@@ -42,6 +40,10 @@ module Mifare
     CMD_COMMIT_TRANSACTION        = 0xC7 # Validates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
     CMD_ABORT_TRANSACTION         = 0xA7 # Invalidates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
 
+    ERROR_CODE = { 0x0C => :no_changes }
+    KEY_TYPE = {'des-ede-cbc' => 0x00, 'des-ede3-cbc' => 0x40, 'aes-128-cbc' => 0x80}
+    KEY_SETTING = {}
+
     def initialize(pcd, uid, sak)
       super
       invalid_auth
@@ -50,6 +52,27 @@ module Mifare
     def deselect
       super
       invalid_auth
+    end
+
+    def transceive(cmd, send_data, calc_cmac = nil)
+      buffer = [cmd] + send_data
+
+      if (calc_cmac == :both || calc_cmac == :tx) && @authed && cmd != CMD_ADDITIONAL_FRAME
+        cmac = @session_key.calculate_cmac(buffer)
+      end
+
+      received_data = super(buffer)
+      status = received_data[0]
+
+      if status != 0x00 && status != 0xAF
+        invalid_auth
+      end
+
+      if (calc_cmac == :both || calc_cmac == :rx) && @authed && cmd == CMD_ADDITIONAL_FRAME
+        
+      end
+
+
     end
 
     def get_app_ids
@@ -68,6 +91,10 @@ module Mifare
       buffer = [CMD_SELECT_APP] + id.reverse
 
       transceive(buffer)
+    end
+
+    def create_app(id, key_setting, key_count, cipher_suite)
+      
     end
 
     def auth(key_number, auth_key)
@@ -112,15 +139,8 @@ module Mifare
       end
 
       @session_key = Key.new(auth_key.type, session_key, key_number)
+      @session_key.generate_cmac_subkeys
       @authed = true
-    end
-
-    def transceive(cmd, send_data, cmac = nil)
-      if @authed && cmd != CMD_ADDITIONAL_FRAME
-        
-      end
-
-
     end
 
     private

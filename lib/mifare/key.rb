@@ -10,36 +10,58 @@ module Mifare
       set_key_data(type, key, version)
       clear_iv
       init_cipher
-      init_cmac
     end
 
-    def encrypt(data, iv = nil)
+    def encrypt(data, cbc_mode = :send)
       @cipher.encrypt
-      @cipher.iv = iv || @cipher_iv
-
-      data = data.pack('C*') # Convert byte array to binary
-      enc_data = @cipher.update(data) + @cipher.final # Encrypt data 
-      @cipher_iv = enc_data[-@block_size..-1] # Save it as iv for next operation
-
-      enc_data.bytes # Convert binary back to byte array
+      
+      cbc_crypt(data, cbc_mode)
     end
 
-    def decrypt(data, iv = nil)
+    def decrypt(data, cbc_mode = :receive)
       @cipher.decrypt
-      @cipher.iv = iv || @cipher_iv
 
-      data = data.pack('C*') # Convert byte array to binary
-      @cipher_iv = data[-@block_size..-1] # Store it as iv for next operation
-
-      (@cipher.update(data) + @cipher.final).bytes # Decrypt data and convert back to byte array
+      cbc_crypt(data, cbc_mode)
     end
 
     def clear_iv
       @cipher_iv = "\x00" * @block_size
     end
 
-    def generate_cmac(data)
-      @cmac.generate(data)
+    def generate_cmac_subkeys
+      r = (@block_size == 8) ? 0x1B : 0x87
+      data = Array.new(16, 0)
+
+      clear_iv
+      data = encrypt(data, :receive)
+
+      @cmac_subkey1 = data << @block_size
+      @cmac_subkey1[@block_size - 1] ^= r if data[0] & 0x80 != 0
+
+      @cmac_subkey2 = @cmac_subkey1 << @block_size
+      @cmac_subkey2[@block_size - 1] ^= r if @cmac_subkey1[0] & 0x80 != 0
+    end
+
+    def calculate_cmac(data)
+      # Separate from input object
+      data = data.dup
+
+      if data.size == 0 || data.size % @block_size != 0
+        # padding with byte: 0x80, 0x00, 0x00.....
+        data << 0x80
+        until data.size % @block_size == 0
+          data << 0x00
+        end
+
+        key = @cmac_subkey1
+      else
+        key = @cmac_subkey2
+      end
+
+      # XOR last data block
+      data = data[0...-@block_size] + data[-@block_size..-1].zip(key).map{|x, y| x ^ y }
+
+      encrypt(data)
     end
 
     private
@@ -48,12 +70,6 @@ module Mifare
       @cipher = OpenSSL::Cipher.new(@cipher_suite)
       @cipher.key = @key
       @cipher.padding = 0
-    end
-
-    def init_cmac
-      key = @key
-      key *= 2 if @key_size == 8
-      @cmac = OpenSSL::CMAC.new(key)
     end
 
     def set_key_data(key_type, key, version)
@@ -70,7 +86,8 @@ module Mifare
         @key = store_key_version(key, version)
 
         if @key_size == 8
-          @cipher_suite = 'des-cbc'
+          @key += @key
+          @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 16
           @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 24
@@ -102,6 +119,25 @@ module Mifare
           parity = 0
         end
         (key_byte & 0xFE) | parity
+      end
+    end
+
+    def cbc_crypt(data, mode)
+      @cipher.iv = @cipher_iv
+      data = data.pack('C*') # Convert byte array to binary
+
+      if mode == :send
+        output_data = @cipher.update(data) + @cipher.final
+        @cipher_iv = output_data[-@block_size..-1]
+
+        output_data.bytes
+      elsif mode == :receive
+        @cipher_iv = data[-@block_size..-1]
+        output_data = (@cipher.update(data) + @cipher.final)
+
+        output_data.bytes
+      else
+        raise UnexpectedDataError, 'Unknown CBC mode'
       end
     end
   end

@@ -3,7 +3,6 @@ require 'pi_piper'
 require 'openssl'
 require 'securerandom'
 
-require 'openssl_cmac'
 require 'picc'
 require 'iso144434'
 require 'exceptions'
