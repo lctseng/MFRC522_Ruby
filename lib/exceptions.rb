@@ -1,5 +1,3 @@
-class TimeoutError < StandardError; end
-
 class CommunicationError < StandardError; end
 class PICCTimeoutError < CommunicationError; end
 class PCDTimeoutError < CommunicationError; end

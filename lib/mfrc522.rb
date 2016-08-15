@@ -243,6 +243,7 @@ class MFRC522
 
     cascade_levels = [PICC_SEL_CL1, PICC_SEL_CL2, PICC_SEL_CL3]
     uid = []
+    sak = 0
 
     cascade_levels.each do |cascade_level|
       buffer = [cascade_level]
@@ -320,13 +321,13 @@ class MFRC522
       break if (sak & 0x04) == 0 # No more cascade level
     end
 
-    uid, sak
+    return uid, sak
   end
 
   # Trying to restart picc
   def reestablish_picc_communication(uid)
-    return false unless picc_halt
-    return false unless picc_request(PICC_WUPA)
+    picc_halt
+    picc_request(PICC_WUPA)
 
     status, new_uid, _new_sak = picc_select
 
@@ -547,7 +548,7 @@ class MFRC522
 
   # Calculate and append CRC to data
   def append_crc(data)
-    data.concat(calculate_crc(data))
+    data + calculate_crc(data)
   end
 
   # Check CRC using MFRC522's built-in coprocessor

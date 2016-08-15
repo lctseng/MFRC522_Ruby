@@ -23,7 +23,7 @@ module Mifare
         key = key[:b]
       end
 
-      key = [key].pack('H*')
+      key = [key].pack('H*').bytes
       if key.size != 6
         raise UnexpectedDataError, "Expect 6 bytes auth key, got: #{key.size} byte"
       end
@@ -96,11 +96,13 @@ module Mifare
 
     # Increment: Increments the contents of a block and stores the result in the internal Transfer Buffer
     def increment(block_addr, delta)
+      raise UnexpectedDataError, 'Delta should be positive integer' if delta < 0
       two_step(CMD_INCREMENT, block_addr, delta)
     end
 
     # Decrement: Decrements the contents of a block and stores the result in the internal Transfer Buffer
     def decrement(block_addr, delta)
+      raise UnexpectedDataError, 'Delta should be positive integer' if delta < 0
       two_step(CMD_DECREMENT, block_addr, delta)
     end
 
@@ -130,28 +132,23 @@ module Mifare
       @pcd.picc_transceive(send_data, true) # Accept timeout
     end
 
+    # Manually convert integer
     def convert_integer(number)
       if number.is_a?(Array)
-        if number.size != 4
-          raise UnexpectedDataError, 'Expect 4 bytes signed integer'
-        end
-
-        sign = (number[3] & 0x80 != 0) ? -1 : 1
+        sign = (number[3] & 0x80 != 0) ? (-1 ^ 0x7FFFFFFF) : 0
 
         number = ((number[3] & 0x7F) << 24) +
                  (number[2] << 16) +
                  (number[1] << 8) +
                  number[0]
 
-        number *= sign
+        sign | number
       else
         if number.abs >= (1 << 31)
           raise UnexpectedDataError, 'Expect 4 bytes signed integer'
         end
 
-        # Manually convert integer
         sign = (number < 0) ? 1 : 0
-        number = number.abs
 
         [number & 0xFF,
         (number >> 8) & 0xFF,

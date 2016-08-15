@@ -38,6 +38,10 @@ module Mifare
       @authed = true
     end
 
+    def authed?
+      @authed
+    end
+
     def write_des_key(key)
       # key should be 16 bytes long
       bytes = [key].pack('H*').bytes
