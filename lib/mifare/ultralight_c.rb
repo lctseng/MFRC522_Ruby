@@ -13,9 +13,10 @@ module Mifare
       # Ask for authentication
       buffer = [CMD_3DES_AUTH, 0x00]
       received_data = @pcd.picc_transceive(buffer)
-      raise UnexpectedDataError, 'Incorrect response' if received_data[0] != 0xAF
+      card_status = received_data.shift
+      raise UnexpectedDataError, 'Incorrect response' if card_status != 0xAF
 
-      challenge = auth_key.decrypt(received_data[1..-1])
+      challenge = auth_key.decrypt(received_data)
       challenge_rot = challenge.rotate
 
       # Generate 8 bytes random number and encrypt it with rotated challenge
@@ -25,10 +26,11 @@ module Mifare
       # Send challenge response
       buffer = [0xAF] + response
       received_data = @pcd.picc_transceive(buffer)
-      raise UnexpectedDataError, 'Incorrect response' if received_data[0] != 0x00
+      card_status = received_data.shift
+      raise UnexpectedDataError, 'Incorrect response' if card_status != 0x00
 
       # Check if verification matches rotated random_number
-      verification = auth_key.decrypt(received_data[1..-1])
+      verification = auth_key.decrypt(received_data)
 
       if random_number.rotate != verification
         halt

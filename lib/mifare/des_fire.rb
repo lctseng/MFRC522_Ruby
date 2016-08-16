@@ -40,13 +40,14 @@ module Mifare
     CMD_COMMIT_TRANSACTION        = 0xC7 # Validates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
     CMD_ABORT_TRANSACTION         = 0xA7 # Invalidates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
 
-    ERROR_CODE = { 0x0C => :no_changes }
+
     KEY_TYPE = {'des-ede-cbc' => 0x00, 'des-ede3-cbc' => 0x40, 'aes-128-cbc' => 0x80}
     KEY_SETTING = {}
 
     def initialize(pcd, uid, sak)
       super
       invalid_auth
+      @cmac_buffer = []
     end
 
     def deselect
@@ -54,31 +55,57 @@ module Mifare
       invalid_auth
     end
 
-    def transceive(cmd, send_data, calc_cmac = nil)
+    def transceive(cmd, send_data = [], calc_cmac = nil)
+      raise UnexpectedDataError, 'Set calc_cmac when in Authed state' if calc_cmac.nil? && @authed
+
       buffer = [cmd] + send_data
 
-      if (calc_cmac == :both || calc_cmac == :tx) && @authed && cmd != CMD_ADDITIONAL_FRAME
-        cmac = @session_key.calculate_cmac(buffer)
+      if (calc_cmac == :both || calc_cmac == :tx) && cmd != 0xAF && @authed
+        @cmac_buffer = buffer
+        cmac = @session_key.calculate_cmac(@cmac_buffer)
       end
 
       received_data = super(buffer)
-      status = received_data[0]
+      card_status = received_data.shift
 
-      if status != 0x00 && status != 0xAF
+      if card_status != 0x00 && card_status != 0xAF
         invalid_auth
       end
 
-      if (calc_cmac == :both || calc_cmac == :rx) && @authed && cmd == CMD_ADDITIONAL_FRAME
-        
+      if (calc_cmac == :both || calc_cmac == :rx) && (card_status == 0x00 || card_status == 0xAF) && @authed
+        @cmac_buffer = [] if cmd != 0xAF
+        @cmac_buffer.concat(received_data) if card_status == 0xAF
+
+        if received_data.size >= 8 && card_status == 0x00
+          received_cmac = received_data.pop(8)
+          @cmac_buffer.concat(received_data + [card_status])
+          cmac = @session_key.calculate_cmac(@cmac_buffer)
+          if cmac != received_cmac
+            raise MismatchCMACError
+          end
+        end
       end
 
-
+      return card_status, received_data
     end
 
     def get_app_ids
-      received_data = transceive([CMD_GET_APP_IDS])
+      ids = []
 
-      ids = received_data[1..-1].each_slice(3).to_a
+      card_status, received_data = transceive(CMD_GET_APP_IDS, [], :both)
+      ids.concat(received_data)
+
+      # 20 applications or above will need two frames
+      if card_status == 0xAF
+        card_status, received_data = transceive(0xAF, [], :rx)
+        ids.concat(received_data)
+      end
+
+      raise UnexpectedDataError, 'Incorrect response' if card_status != 0x00
+
+      return ids if ids.size == 0
+
+      ids = ids.each_slice(3).to_a
       ids.map do |id|
         (id[2] << 16) & (id[1] << 8) & id[0]
       end
@@ -87,10 +114,11 @@ module Mifare
     def select_app(id)
       invalid_auth
 
-      id = [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF]
-      buffer = [CMD_SELECT_APP] + id.reverse
+      id = [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF].reverse
 
-      transceive(buffer)
+      card_status, received_data = transceive(CMD_SELECT_APP, id)
+
+      card_status == 0x00
     end
 
     def create_app(id, key_setting, key_count, cipher_suite)
@@ -102,10 +130,10 @@ module Mifare
       auth_key.clear_iv
 
       # Ask for authentication
-      buffer = [cmd, key_number]
-      received_data = transceive(buffer)
+      card_status, received_data = transceive(cmd, [key_number])
+      raise UnexpectedDataError, 'Incorrect response' if card_status != 0xAF
 
-      challenge = auth_key.decrypt(received_data[1..-1])
+      challenge = auth_key.decrypt(received_data)
       challenge_rot = challenge.rotate
 
       # Generate 8 bytes random number and encrypt it with rotated challenge
@@ -113,11 +141,11 @@ module Mifare
       response = auth_key.encrypt(random_number + challenge_rot)
 
       # Send challenge response
-      buffer = [0xAF] + response
-      received_data = transceive(buffer)
+      card_status, received_data = transceive(0xAF, response)
+      raise UnexpectedDataError, 'Incorrect response' if card_status != 0x00
 
       # Check if verification matches rotated random_number
-      verification = auth_key.decrypt(received_data[1..-1])
+      verification = auth_key.decrypt(received_data)
 
       if random_number.rotate != verification
         halt

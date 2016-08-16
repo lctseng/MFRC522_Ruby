@@ -197,7 +197,7 @@ class MFRC522
 
     status, _received_data, valid_bits = communicate_with_picc(PCD_Transceive, picc_command, 0x07)
 
-    status == :status_ok && valid_bits != 0 # REQA or WUPA command return 16 bits(full byte)
+    status == :status_ok && valid_bits == 0 # REQA or WUPA command return 16 bits(full byte)
   end
 
   # Instruct PICC in ACTIVE state go to HALT state
@@ -554,7 +554,10 @@ class MFRC522
   def check_crc(data)
     raise UnexpectedDataError, 'Data too short for CRC check' if data.size < 3
 
-    data[-2..-1] == calculate_crc(data[0..-3])
+    data = data.dup
+    crc = data.pop(2)
+
+    crc == calculate_crc(data)
   end
 
 end

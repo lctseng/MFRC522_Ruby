@@ -30,16 +30,16 @@ module Mifare
 
     def generate_cmac_subkeys
       r = (@block_size == 8) ? 0x1B : 0x87
-      data = Array.new(16, 0)
+      data = Array.new(@block_size, 0)
 
       clear_iv
       data = encrypt(data, :receive)
 
-      @cmac_subkey1 = data << @block_size
-      @cmac_subkey1[@block_size - 1] ^= r if data[0] & 0x80 != 0
+      @cmac_subkey1 = bit_shift_left(data)
+      @cmac_subkey1[-1] ^= r if data[0] & 0x80 != 0
 
-      @cmac_subkey2 = @cmac_subkey1 << @block_size
-      @cmac_subkey2[@block_size - 1] ^= r if @cmac_subkey1[0] & 0x80 != 0
+      @cmac_subkey2 = bit_shift_left(@cmac_subkey1)
+      @cmac_subkey2[-1] ^= r if @cmac_subkey1[0] & 0x80 != 0
     end
 
     def calculate_cmac(data)
@@ -53,22 +53,23 @@ module Mifare
           data << 0x00
         end
 
-        key = @cmac_subkey1
-      else
         key = @cmac_subkey2
+      else
+        key = @cmac_subkey1
       end
 
-      # XOR last data block
+      # XOR last data block with selected CMAC subkey
       data = data[0...-@block_size] + data[-@block_size..-1].zip(key).map{|x, y| x ^ y }
-
       encrypt(data)
+
+      # Only first 8 bytes are used in transmission
+      @cipher_iv.bytes[0..7]
     end
 
     private
 
     def init_cipher
       @cipher = OpenSSL::Cipher.new(@cipher_suite)
-      @cipher.key = @key
       @cipher.padding = 0
     end
 
@@ -123,6 +124,7 @@ module Mifare
     end
 
     def cbc_crypt(data, mode)
+      @cipher.key = @key
       @cipher.iv = @cipher_iv
       data = data.pack('C*') # Convert byte array to binary
 
@@ -133,11 +135,21 @@ module Mifare
         output_data.bytes
       elsif mode == :receive
         @cipher_iv = data[-@block_size..-1]
-        output_data = (@cipher.update(data) + @cipher.final)
+        output_data = @cipher.update(data) + @cipher.final
 
         output_data.bytes
       else
         raise UnexpectedDataError, 'Unknown CBC mode'
+      end
+    end
+
+    def bit_shift_left(data)
+      data.map.with_index do |value, index|
+        value = (value << 1) & 0xFF
+        if subsequent = data[index+1]
+          value |= (subsequent >> 7) & 0x01
+        end
+        value
       end
     end
   end
