@@ -9,3 +9,5 @@ class UnexpectedDataError < StandardError; end
 class MismatchCMACError < StandardError; end
 
 class MifareNakError < StandardError; end
+
+class UnauthenticatedError < StandardError; end

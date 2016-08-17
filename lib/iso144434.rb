@@ -4,6 +4,7 @@ class ISO144434 < PICC
   CMD_RATS              = 0xE0
   CMD_PPS               = 0xD0
   CMD_DESELECT          = 0xC2
+  CMD_SUCCESS           = 0x00
   CMD_ADDITIONAL_FRAME  = 0xAF
 
   def initialize(pcd, uid, sak)
@@ -33,8 +34,8 @@ class ISO144434 < PICC
     raise UnexpectedDataError, 'Incorrect response' if received_data[0] != (0xD0 | @cid)
 
     # Set PCD baud rate
-    @pcd.transceiver_baud_rate(:tx, dr)
-    @pcd.transceiver_baud_rate(:rx, ds)
+    #@pcd.transceiver_baud_rate(:tx, dr)
+    #@pcd.transceiver_baud_rate(:rx, ds)
 
     @block_number = 0
     @selected = true
@@ -147,10 +148,6 @@ class ISO144434 < PICC
       # Convert fastest baud rate to PCD setting
       dr = convert_iso_baud_rate_to_pcd_setting(dr)
       ds = convert_iso_baud_rate_to_pcd_setting(ds)
-
-      # Temporary workaround
-      dr = 0
-      ds = 0
     end
 
     # Set timeout
@@ -214,6 +211,7 @@ class ISO144434 < PICC
         return received_data
       end
     end
+
     raise PICCTimeoutError
   end
 end

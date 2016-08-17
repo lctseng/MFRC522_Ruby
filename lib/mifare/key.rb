@@ -43,6 +43,10 @@ module Mifare
     end
 
     def calculate_cmac(data)
+      if @cmac_subkey1.nil? || @cmac_subkey2.nil?
+        raise 'Generate subkeys before calculating CMAC'
+      end
+
       # Separate from input object
       data = data.dup
 
@@ -62,8 +66,7 @@ module Mifare
       data = data[0...-@block_size] + data[-@block_size..-1].zip(key).map{|x, y| x ^ y }
       encrypt(data)
 
-      # Only first 8 bytes are used in transmission
-      @cipher_iv.bytes[0..7]
+      @cipher_iv.bytes
     end
 
     private
@@ -79,7 +82,9 @@ module Mifare
       @key_size = key.size
 
       if key_type == :des
-        raise 'Incorrect key length' if @key_size != 8 && @key_size != 16 && @key_size != 24
+        if @key_size != 8 && @key_size != 16 && @key_size != 24
+          raise UnexpectedDataError, 'Incorrect key length'
+        end
 
         # data block size for DES is 8 bytes
         @block_size = 8
@@ -96,14 +101,16 @@ module Mifare
         end
 
       elsif key_type == :aes
-        raise 'Incorrect key length' if @key_size != 16
+        if @key_size != 16
+          raise UnexpectedDataError, 'Incorrect key length'
+        end
 
         # data block size for AES is 16 bytes
         @block_size = 16
         @key = key
         @cipher_suite = 'aes-128-cbc'
       else
-        raise 'Unknown key type'
+        raise UnexpectedDataError, 'Unknown key type'
       end
 
       @key = @key.pack('C*')
