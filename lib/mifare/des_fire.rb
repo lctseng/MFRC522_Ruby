@@ -13,7 +13,7 @@ module Mifare
     CMD_DELETE_APP                = 0xDA # Permanently deactivates applications on the PICC.
     CMD_GET_APP_IDS               = 0x6A # Returns the Application IDentifiers of all applications on a PICC.
     CMD_SELECT_APP                = 0x5A # Selects one specific application for further access.
-    CND_GET_CARD_VERSION          = 0x60 # Returns manufacturing related data of the PICC.
+    CMD_GET_CARD_VERSION          = 0x60 # Returns manufacturing related data of the PICC.
     CMD_FORMAT_CARD               = 0xFC # Releases the PICC user memory.
 
     # Application Level Commands
@@ -100,14 +100,20 @@ module Mifare
     CARD_VERSION = Struct.new(
       :hw_vendor, :hw_type, :hw_subtype, :hw_major_ver, :hw_minor_ver, :hw_storage_size, :hw_protocol,
       :sw_vendor, :sw_type, :sw_subtype, :sw_major_ver, :sw_minor_ver, :sw_storage_size, :sw_protocol,
-      :uid, :batch_number, :production_week, :production_month
+      :uid, :batch_number, :production_week, :production_year
     )
+
+    attr_reader :selected_app
 
     def initialize(pcd, uid, sak)
       super
       invalid_auth
       @cmac_buffer = []
       @selected_app = false
+    end
+
+    def authed?
+      @authed.is_a? Numeric
     end
 
     def deselect
@@ -131,6 +137,12 @@ module Mifare
 
       if card_status != ST_SUCCESS && card_status != ST_ADDITIONAL_FRAME
         invalid_auth
+      end
+
+      error_msg = check_status_code(card_status)
+
+      unless error_msg.empty?
+        raise ReceivedStatusError, "0x#{card_status.to_s(16).rjust(2, '0').upcase} - #{error_msg}"
       end
 
       if (calc_cmac == :both || calc_cmac == :rx) && (card_status == ST_SUCCESS || card_status == ST_ADDITIONAL_FRAME) && @authed
@@ -194,6 +206,8 @@ module Mifare
       @session_key = Key.new(auth_key.type, session_key)
       @session_key.generate_cmac_subkeys
       @authed = key_number
+
+      authed?
     end
 
     def get_app_ids
@@ -227,7 +241,9 @@ module Mifare
 
       card_status, received_data = transceive(cmd: CMD_SELECT_APP, data: convert_app_id(id))
 
-      card_status == ST_SUCCESS && @selected_app = id
+      @selected_app = id
+
+      card_status == ST_SUCCESS
     end
 
     def create_app(id, key_setting, key_count, cipher_suite)
@@ -265,9 +281,9 @@ module Mifare
       version.concat(received_data)
 
       CARD_VERSION.new(
-        version[0], version[1], version[2], version[3], version[4], version[5], version[6],
-        version[7], version[8], version[9], version[10], version[11], version[12], version[13],
-        version[14..20], version[21..25], version[26], version[27]
+        version[0], version[1], version[2], version[3], version[4], 1 << (version[5] / 2), version[6],
+        version[7], version[8], version[9], version[10], version[11], 1 << (version[12] / 2), version[13],
+        version[14..20], version[21..25], version[26].to_s(16).to_i, 2000 + version[27].to_s(16).to_i
       )
     end
 
@@ -325,7 +341,7 @@ module Mifare
     end
 
     def get_key_setting
-      card_status, received_data = transceive(cmd: CMD_GET_KEY_SETTING, data: buffer, calc_cmac: :both)
+      card_status, received_data = transceive(cmd: CMD_GET_KEY_SETTING, calc_cmac: :both)
 
       raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
 
@@ -351,7 +367,7 @@ module Mifare
       if id.is_a?(Array)
         raise UnexpectedDataError, 'Application ID overflow' if id.size > 3
 
-        (id[2] << 16) & (id[1] << 8) & id[0]
+        (id[2] << 16) + (id[1] << 8) + id[0]
       else
         raise UnexpectedDataError, 'Application ID overflow' if id < 0 || id >= (1 << 24)
 
@@ -374,6 +390,53 @@ module Mifare
       end
 
       [(crc >> 24) & 0xFF, (crc >> 16) & 0xFF, (crc >> 8) & 0xFF, crc & 0xFF]
+    end
+
+    def check_status_code(code)
+      case code
+      when ST_SUCCESS, ST_NO_CHANGES, ST_ADDITIONAL_FRAME
+        ''
+      when ST_OUT_OF_MEMORY
+        'Insufficient NV-Memory to complete command.'
+      when ST_ILLEGAL_COMMAND
+        'Command code not supported.'
+      when ST_INTEGRITY_ERROR
+        'CRC or MAC does not match data. Padding bytes not valid.'
+      when ST_KEY_NOT_EXIST
+        'Invalid key number specified.'
+      when ST_WRONG_COMMAND_LEN
+        'Length of command string invalid.'
+      when ST_PERMISSION_DENIED
+        'Current configuration / status does not allow the requested command.'
+      when ST_INCORRECT_PARAM
+        'Value of the parameter(s) invalid.'
+      when ST_APP_NOT_FOUND
+        'Requested AID not present on PICC.'
+      when ST_APPL_INTEGRITY_ERROR
+        'Unrecoverable error within application, application will be disabled.'
+      when ST_AUTHENTICATION_ERROR
+        'Current authentication status does not allow the requested command.'
+      when ST_BOUNDARY_ERROR
+        'Attempt to read/write data from/to beyond the file\'s/record\'s limits.'
+      when ST_PICC_INTEGRITY_ERROR
+        'Unrecoverable error within PICC, PICC will be disabled.'
+      when ST_COMMAND_ABORTED
+        'Previous Command was not fully completed. Not all Frames were requested or provided by the PCD.'
+      when ST_PICC_DISABLED_ERROR
+        'PICC was disabled by an unrecoverable error.'
+      when ST_COUNT_ERROR
+        'Number of Applications limited to 28, no additional CreateApplication possible.'
+      when ST_DUPLICATE_ERROR
+        'Creation of file/application failed because file/application with same number already exists.'
+      when ST_EEPROM_ERROR
+        'Could not complete NV-write operation due to loss of power, internal backup/rollback mechanism activated.'
+      when ST_FILE_NOT_FOUND
+        'Specified file number does not exist.'
+      when ST_FILE_INTEGRITY_ERROR
+        'Unrecoverable error within file, file will be disabled.'
+      else
+        'Unknown Error Code.'
+      end
     end
   end
 end

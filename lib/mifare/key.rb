@@ -20,7 +20,7 @@ module Mifare
       @cipher.encrypt
 
       # padding
-      until data % @block_size == 0
+      until data.size % @block_size == 0
         data << 0x00
       end
       
