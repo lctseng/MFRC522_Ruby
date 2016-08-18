@@ -173,8 +173,8 @@ module Mifare
       challenge = auth_key.decrypt(received_data)
       challenge_rot = challenge.rotate
 
-      # Generate 8 bytes random number and encrypt it with rotated challenge
-      random_number = SecureRandom.random_bytes(8).bytes
+      # Generate random number and encrypt it with rotated challenge
+      random_number = SecureRandom.random_bytes(received_data.size).bytes
       response = auth_key.encrypt(random_number + challenge_rot)
 
       # Send challenge response
