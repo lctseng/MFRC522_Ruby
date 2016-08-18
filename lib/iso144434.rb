@@ -34,8 +34,8 @@ class ISO144434 < PICC
     raise UnexpectedDataError, 'Incorrect response' if received_data[0] != (0xD0 | @cid)
 
     # Set PCD baud rate
-    #@pcd.transceiver_baud_rate(:tx, dr)
-    #@pcd.transceiver_baud_rate(:rx, ds)
+    @pcd.transceiver_baud_rate(:tx, dr)
+    @pcd.transceiver_baud_rate(:rx, ds)
 
     @block_number = 0
     @selected = true
@@ -148,6 +148,9 @@ class ISO144434 < PICC
       # Convert fastest baud rate to PCD setting
       dr = convert_iso_baud_rate_to_pcd_setting(dr)
       ds = convert_iso_baud_rate_to_pcd_setting(ds)
+
+      dr = 0
+      ds = 0
     end
 
     # Set timeout

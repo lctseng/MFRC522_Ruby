@@ -12,8 +12,17 @@ module Mifare
       init_cipher
     end
 
+    def key
+      @key.bytes
+    end
+
     def encrypt(data, cbc_mode = :send)
       @cipher.encrypt
+
+      # padding
+      until data % @block_size == 0
+        data << 0x00
+      end
       
       cbc_crypt(data, cbc_mode)
     end

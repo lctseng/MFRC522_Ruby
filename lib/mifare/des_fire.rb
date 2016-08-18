@@ -40,6 +40,7 @@ module Mifare
     CMD_COMMIT_TRANSACTION        = 0xC7 # Validates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
     CMD_ABORT_TRANSACTION         = 0xA7 # Invalidates all previous write access’ on Backup Data Files, Value Files and Record Files within one application.
 
+    # Status code returned by DESFire
     ST_SUCCESS                    = 0x00
     ST_NO_CHANGES                 = 0x0C
     ST_OUT_OF_MEMORY              = 0x0E
@@ -96,10 +97,17 @@ module Mifare
       CHANGE_KEY_FROZEN:            0xF0  # All keys are frozen
     }
 
+    CARD_VERSION = Struct.new(
+      :hw_vendor, :hw_type, :hw_subtype, :hw_major_ver, :hw_minor_ver, :hw_storage_size, :hw_protocol,
+      :sw_vendor, :sw_type, :sw_subtype, :sw_major_ver, :sw_minor_ver, :sw_storage_size, :sw_protocol,
+      :uid, :batch_number, :production_week, :production_month
+    )
+
     def initialize(pcd, uid, sak)
       super
       invalid_auth
       @cmac_buffer = []
+      @selected_app = false
     end
 
     def deselect
@@ -107,10 +115,11 @@ module Mifare
       invalid_auth
     end
 
-    def transceive(cmd, send_data = [], calc_cmac = nil)
+    def transceive(cmd: , data: [], calc_cmac: nil)
       raise UnexpectedDataError, 'Implicit calc_cmac in Authed state is not supported' if calc_cmac.nil? && @authed
 
-      buffer = [cmd] + send_data
+      data = [data] unless data.is_a? Array
+      buffer = [cmd] + data
 
       if (calc_cmac == :both || calc_cmac == :tx) && cmd != CMD_ADDITIONAL_FRAME && @authed
         @cmac_buffer = buffer
@@ -146,7 +155,7 @@ module Mifare
       auth_key.clear_iv
 
       # Ask for authentication
-      card_status, received_data = transceive(cmd, [key_number])
+      card_status, received_data = transceive(cmd: cmd, data: key_number)
       raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
 
       challenge = auth_key.decrypt(received_data)
@@ -157,7 +166,7 @@ module Mifare
       response = auth_key.encrypt(random_number + challenge_rot)
 
       # Send challenge response
-      card_status, received_data = transceive(CMD_ADDITIONAL_FRAME, response)
+      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, data: response)
       raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
 
       # Check if verification matches rotated random_number
@@ -184,18 +193,18 @@ module Mifare
 
       @session_key = Key.new(auth_key.type, session_key)
       @session_key.generate_cmac_subkeys
-      @authed = true
+      @authed = key_number
     end
 
     def get_app_ids
       ids = []
 
-      card_status, received_data = transceive(CMD_GET_APP_IDS, [], :both)
+      card_status, received_data = transceive(cmd: CMD_GET_APP_IDS, calc_cmac: :both)
       ids.concat(received_data)
 
       # 20 applications or above will need two frames
       if card_status == ST_ADDITIONAL_FRAME
-        card_status, received_data = transceive(CMD_ADDITIONAL_FRAME, [], :rx)
+        card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
         ids.concat(received_data)
       end
 
@@ -216,9 +225,9 @@ module Mifare
     def select_app(id)
       invalid_auth
 
-      card_status, received_data = transceive(CMD_SELECT_APP, convert_app_id(id))
+      card_status, received_data = transceive(cmd: CMD_SELECT_APP, data: convert_app_id(id))
 
-      card_status == ST_SUCCESS
+      card_status == ST_SUCCESS && @selected_app = id
     end
 
     def create_app(id, key_setting, key_count, cipher_suite)
@@ -227,7 +236,7 @@ module Mifare
 
       buffer = convert_app_id(id) + [key_setting, key_count | KEY_TYPE[cipher_suite]]
 
-      card_status, received_data = transceive(CMD_CREATE_APP, buffer, :both)
+      card_status, received_data = transceive(cmd: CMD_CREATE_APP, data: buffer, calc_cmac: :both)
 
       card_status == ST_SUCCESS
     end
@@ -235,26 +244,94 @@ module Mifare
     def delete_app(id)
       raise UnauthenticatedError unless @authed
 
-      card_status, received_data = transceive(CMD_DELETE_APP, convert_app_id(id), :both)
+      card_status, received_data = transceive(cmd: CMD_DELETE_APP, data: convert_app_id(id), calc_cmac: :both)
+
+      card_status == ST_SUCCESS
+    end
+
+    def get_card_version
+      version = []
+
+      card_status, received_data = transceive(cmd: CMD_GET_CARD_VERSION, calc_cmac: :both)
+      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
+      version.concat(received_data)
+
+      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
+      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
+      version.concat(received_data)
+
+      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
+      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
+      version.concat(received_data)
+
+      CARD_VERSION.new(
+        version[0], version[1], version[2], version[3], version[4], version[5], version[6],
+        version[7], version[8], version[9], version[10], version[11], version[12], version[13],
+        version[14..20], version[21..25], version[26], version[27]
+      )
+    end
+
+    def format_card
+      raise UnauthenticatedError unless @authed
+
+      card_status, received_data = transceive(cmd: CMD_FORMAT_CARD, calc_cmac: :both)
 
       card_status == ST_SUCCESS
     end
 
     def get_key_version(key_number)
-      card_status, received_data = transceive(CMD_GET_KEY_VERSION, key_number, :both)
+      card_status, received_data = transceive(cmd: CMD_GET_KEY_VERSION, data: key_number, calc_cmac: :both)
 
       raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
 
-      received_data
+      received_data[0]
     end
 
-    def change_key(key_number, new_key)
+    def change_key(key_number, new_key, curr_key)
       raise UnauthenticatedError unless @authed
       
+      cryptogram = new_key.key
+
+      same_key = (key_number == @authed)
+
+      # Only Master Key can change its key type
+      key_number |= KEY_TYPE[new_key.cipher_suite] if @selected_app == 0
+
+      # XOR new key if we're using different one
+      unless same_key
+        cryptogram = cryptogram.zip(curr_key.key).map{|x, y| x ^ y }
+      end
+
+      # AES stores key version separately
+      if new_key.type == :aes
+        cryptogram << new_key.version
+      end
+
+      cryptogram.concat(crc32([CMD_CHANGE_KEY, key_number], cryptogram).reverse)
+
+      unless same_key
+        cryptogram.concat(crc32(new_key.key).reverse)
+      end
+
+      # Encrypt cryptogram
+      buffer = [key_number] + @session_key.encrypt(cryptogram)
+
+      # Change current used key will revoke authentication
+      invalid_auth if same_key
+
+      card_status, received_data = transceive(cmd: CMD_CHANGE_KEY, data: buffer, calc_cmac: :rx)
+
+      card_status == ST_SUCCESS
     end
 
-    def get_key_setting()
-      
+    def get_key_setting
+      card_status, received_data = transceive(cmd: CMD_GET_KEY_SETTING, data: buffer, calc_cmac: :both)
+
+      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
+
+      { key_setting: received_data[0],
+        key_count: received_data[1] & 0x0F,
+        key_type: KEY_TYPE.key(received_data[1] & 0xF0) }
     end
 
     def change_key_setting()
@@ -267,6 +344,7 @@ module Mifare
     def invalid_auth
       @authed = false
       @session_key = nil
+      @cmac_buffer = []
     end
 
     def convert_app_id(id)
@@ -279,6 +357,23 @@ module Mifare
 
         [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF].reverse
       end
+    end
+
+    def crc32(*datas)
+      crc = 0xFFFFFFFF
+
+      datas.each do |data|
+        data.each do |byte|
+          crc ^= byte
+          8.times do
+            flag = crc & 0x01 > 0
+            crc >>= 1
+            crc ^= 0xEDB88320 if flag
+          end
+        end
+      end
+
+      [(crc >> 24) & 0xFF, (crc >> 16) & 0xFF, (crc >> 8) & 0xFF, crc & 0xFF]
     end
   end
 end
