@@ -57,7 +57,7 @@ class ISO144434 < PICC
   # Wrapper for handling ISO protocol
   def transceive(send_data)
     # Split data according to PICC's spec
-    chained_data = send_data.each_slice(@fsc - 5).to_a
+    chained_data = send_data.each_slice([64, @fsc].min - 5).to_a
     pcb = 0x02
 
     # Send chained data
@@ -113,8 +113,13 @@ class ISO144434 < PICC
     inf
   end
 
+  def resume_communication
+    deselect rescue nil
+    super
+  end
+
   def halt
-    deselect
+    deselect rescue nil
     super
   end
 
@@ -183,7 +188,7 @@ class ISO144434 < PICC
   end
 
   def handle_wtx(data)
-    3.times do
+    24.times do
       begin
         received_data = @pcd.picc_transceive(data)
       rescue CommunicationError => e

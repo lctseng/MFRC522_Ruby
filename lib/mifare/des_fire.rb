@@ -65,37 +65,81 @@ module Mifare
     ST_FILE_INTEGRITY_ERROR       = 0xF1
 
     KEY_TYPE = {'des-ede-cbc' => 0x00, 'des-ede3-cbc' => 0x40, 'aes-128-cbc' => 0x80}
-    KEY_SETTING = {
-      # If this bit is set, the MK can be changed, otherwise it is frozen.
-      ALLOW_CHANGE_MK:              0x01,
-      # Picc key: If this bit is set, GetApplicationIDs, GetKeySettings do not require MK authentication.
-      # App  key: If this bit is set, GetFileIDs, GetFileSettings, GetKeySettings do not require MK authentication.
-      LISTING_WITHOUT_MK:           0x02,
-      # Picc key: If this bit is set, CreateApplication does not require MK authentication.
-      # App  key: If this bit is set, CreateFile, DeleteFile do not require MK authentication.
-      CREATE_DELETE_WITHOUT_MK:     0x04,
-      # If this bit is set, the configuration settings of the MK can be changed, otherwise they are frozen.
-      CONFIGURATION_CHANGEABLE:     0x08,
-      # Set every bits listed above.
-      FACTORY_DEFAULT:              0x0F,
 
-      CHANGE_KEY_WITH_MK:           0x00, # A key change requires MK authentication
-      CHANGE_KEY_WITH_KEY_1:        0x10, # A key change requires authentication with key 1
-      CHANGE_KEY_WITH_KEY_2:        0x20, # A key change requires authentication with key 2
-      CHANGE_KEY_WITH_KEY_3:        0x30, # A key change requires authentication with key 3
-      CHANGE_KEY_WITH_KEY_4:        0x40, # A key change requires authentication with key 4
-      CHANGE_KEY_WITH_KEY_5:        0x50, # A key change requires authentication with key 5
-      CHANGE_KEY_WITH_KEY_6:        0x60, # A key change requires authentication with key 6
-      CHANGE_KEY_WITH_KEY_7:        0x70, # A key change requires authentication with key 7
-      CHANGE_KEY_WITH_KEY_8:        0x80, # A key change requires authentication with key 8
-      CHANGE_KEY_WITH_KEY_9:        0x90, # A key change requires authentication with key 9
-      CHANGE_KEY_WITH_KEY_A:        0xA0, # A key change requires authentication with key 10
-      CHANGE_KEY_WITH_KEY_B:        0xB0, # A key change requires authentication with key 11
-      CHANGE_KEY_WITH_KEY_C:        0xC0, # A key change requires authentication with key 12
-      CHANGE_KEY_WITH_KEY_D:        0xD0, # A key change requires authentication with key 13
-      CHANGE_KEY_WITH_TARGETED_KEY: 0xE0, # A key change requires authentication with the same key that is to be changed
-      CHANGE_KEY_FROZEN:            0xF0  # All keys are frozen
+    KEY_SETTING = Struct.new(
+      # Key number(0x00~0x0D) required for `change_key`
+      # 0x0E means same key, 0x0F freezes all keys
+      :privileged_key,
+      # Set if master key can be modified
+      :mk_changeable,
+      # Set if listing requires master key
+      :listing_without_mk,
+      # Set if create or delete requires master key
+      :create_delete_without_mk,
+      # Set if this setting can be modified
+      :configuration_changeable) do
+      def initialize(*data)
+        super
+        default
+      end
+
+      def default
+        self[:privileged_key] = 0 unless privileged_key
+        self[:mk_changeable] = true unless mk_changeable
+        self[:listing_without_mk] = true unless listing_without_mk
+        self[:create_delete_without_mk] = true unless create_delete_without_mk
+        self[:configuration_changeable] = true unless configuration_changeable
+      end
+
+      def import(byte)
+        self[:privileged_key] = (byte >> 4) & 0x0F
+        self[:mk_changeable] = byte & 0x01 != 0
+        self[:listing_without_mk] = (byte >> 1) & 0x01 != 0
+        self[:create_delete_without_mk] = (byte >> 2) & 0x01 != 0
+        self[:configuration_changeable] = (byte >> 3) & 0x01 != 0
+        self
+      end
+
+      def to_uint
+        output = (privileged_key << 4)
+        output |= 0x01 if mk_changeable
+        output |= 0x02 if listing_without_mk
+        output |= 0x04 if create_delete_without_mk
+        output |= 0x08 if configuration_changeable
+        output
+      end
+    end
+
+    FILE_TYPE = {
+      std_data_file: 0x00, backup_data_file: 0x01, value_file: 0x02,
+      linear_record_file: 0x03, cyclic_record_file: 0x04
     }
+
+    FILE_ENCRYPTION = {plain: 0x00, mac: 0x01, encrypt: 0x03}
+
+    # value 0x00 ~ 0x0D are key numbers, 0x0E grants free access, 0x0F always denies access
+    FILE_PERMISSION = Struct.new(:read_access, :write_access, :read_write_access, :change_access) do
+      def to_uint
+        (read_access << 12) | (write_access << 8) | (read_write_access << 4) | change_access
+      end
+    end
+
+    FILE_SETTING = Struct.new(
+      :type,
+      :encryption,
+      :permissions,
+      # Data file only
+      :size, # PICC will allocate n * 32 bytes memory internally
+      # Value file only
+      :lower_limit,
+      :upper_limit,
+      :limited_credit_value,
+      :limited_credit,
+      # Record file only
+      :record_size,
+      :max_record_number,
+      :current_record_number
+    )
 
     CARD_VERSION = Struct.new(
       :hw_vendor, :hw_type, :hw_subtype, :hw_major_ver, :hw_minor_ver, :hw_storage_size, :hw_protocol,
@@ -121,13 +165,24 @@ module Mifare
       invalid_auth
     end
 
-    def transceive(cmd: , data: [], calc_cmac: nil)
-      raise UnexpectedDataError, 'Implicit calc_cmac in Authed state is not supported' if calc_cmac.nil? && @authed
+    def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil)
+      if (tx == :encrypt || rx == :encrypt) && !@authed
+        raise UnauthenticatedError
+      end
 
+      plain_data = [plain_data] unless plain_data.is_a? Array
       data = [data] unless data.is_a? Array
-      buffer = [cmd] + data
 
-      if (calc_cmac == :both || calc_cmac == :tx) && cmd != CMD_ADDITIONAL_FRAME && @authed
+      buffer = [cmd] + plain_data
+
+      if tx == :encrypt
+        data.append_uint(crc32(buffer, data), 4)
+        data = @session_key.encrypt(data)
+      end
+
+      buffer.concat(data)
+
+      if tx == :cmac && cmd != CMD_ADDITIONAL_FRAME && @authed
         @cmac_buffer = buffer
         cmac = @session_key.calculate_cmac(@cmac_buffer)
       end
@@ -145,7 +200,11 @@ module Mifare
         raise ReceivedStatusError, "0x#{card_status.to_s(16).rjust(2, '0').upcase} - #{error_msg}"
       end
 
-      if (calc_cmac == :both || calc_cmac == :rx) && (card_status == ST_SUCCESS || card_status == ST_ADDITIONAL_FRAME) && @authed
+      if expect && expect != card_status
+        raise UnexpectedDataError, 'Card status does not match expected value'
+      end
+
+      if rx == :cmac && (card_status == ST_SUCCESS || card_status == ST_ADDITIONAL_FRAME) && @authed
         @cmac_buffer = [] if cmd != CMD_ADDITIONAL_FRAME
         @cmac_buffer.concat(received_data) if card_status == ST_ADDITIONAL_FRAME
 
@@ -159,7 +218,15 @@ module Mifare
         end
       end
 
-      return card_status, received_data
+      if rx == :encrypt
+        received_data = @session_key.decrypt(received_data)
+      end
+
+      if expect
+        return received_data
+      else
+        return card_status, received_data
+      end
     end
 
     def auth(key_number, auth_key)
@@ -167,8 +234,7 @@ module Mifare
       auth_key.clear_iv
 
       # Ask for authentication
-      card_status, received_data = transceive(cmd: cmd, data: key_number)
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
+      received_data = transceive(cmd: cmd, data: key_number, expect: ST_ADDITIONAL_FRAME)
 
       challenge = auth_key.decrypt(received_data)
       challenge_rot = challenge.rotate
@@ -178,15 +244,16 @@ module Mifare
       response = auth_key.encrypt(random_number + challenge_rot)
 
       # Send challenge response
-      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, data: response)
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
+      received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, data: response, expect: ST_SUCCESS)
 
       # Check if verification matches rotated random_number
       verification = auth_key.decrypt(received_data)
 
       if random_number.rotate != verification
         halt
-        return @authed = false
+        @authed = false
+
+        raise UnexpectedDataError, 'Authentication Failed'
       end
 
       # Generate session key
@@ -213,12 +280,12 @@ module Mifare
     def get_app_ids
       ids = []
 
-      card_status, received_data = transceive(cmd: CMD_GET_APP_IDS, calc_cmac: :both)
+      card_status, received_data = transceive(cmd: CMD_GET_APP_IDS, tx: :cmac, rx: :cmac)
       ids.concat(received_data)
 
       # 20 applications or above will need two frames
       if card_status == ST_ADDITIONAL_FRAME
-        card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
+        card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac)
         ids.concat(received_data)
       end
 
@@ -228,7 +295,7 @@ module Mifare
 
       ids = ids.each_slice(3).to_a
       ids.map do |id|
-        convert_app_id(id)
+        id.to_uint
       end
     end
 
@@ -239,45 +306,36 @@ module Mifare
     def select_app(id)
       invalid_auth
 
-      card_status, received_data = transceive(cmd: CMD_SELECT_APP, data: convert_app_id(id))
+      transceive(cmd: CMD_SELECT_APP, data: convert_app_id(id), expect: ST_SUCCESS)
 
       @selected_app = id
-
-      card_status == ST_SUCCESS
     end
 
     def create_app(id, key_setting, key_count, cipher_suite)
       raise UnauthenticatedError unless @authed
-      raise UnexpectedDataError, 'Too many keys' if key_count > 14
+      raise UnexpectedDataError, 'An application can only hold up to 14 keys.' if key_count > 14
 
-      buffer = convert_app_id(id) + [key_setting, key_count | KEY_TYPE[cipher_suite]]
+      buffer = convert_app_id(id) + [key_setting.to_uint, key_count | KEY_TYPE[cipher_suite]]
 
-      card_status, received_data = transceive(cmd: CMD_CREATE_APP, data: buffer, calc_cmac: :both)
-
-      card_status == ST_SUCCESS
+      transceive(cmd: CMD_CREATE_APP, data: buffer, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def delete_app(id)
       raise UnauthenticatedError unless @authed
 
-      card_status, received_data = transceive(cmd: CMD_DELETE_APP, data: convert_app_id(id), calc_cmac: :both)
-
-      card_status == ST_SUCCESS
+      transceive(cmd: CMD_DELETE_APP, data: convert_app_id(id), tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def get_card_version
       version = []
 
-      card_status, received_data = transceive(cmd: CMD_GET_CARD_VERSION, calc_cmac: :both)
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
+      received_data = transceive(cmd: CMD_GET_CARD_VERSION, tx: :cmac, rx: :cmac, expect: ST_ADDITIONAL_FRAME)
       version.concat(received_data)
 
-      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_ADDITIONAL_FRAME
+      received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac, expect: ST_ADDITIONAL_FRAME)
       version.concat(received_data)
 
-      card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, calc_cmac: :rx)
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
+      received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac, expect: ST_SUCCESS)
       version.concat(received_data)
 
       CARD_VERSION.new(
@@ -290,21 +348,18 @@ module Mifare
     def format_card
       raise UnauthenticatedError unless @authed
 
-      card_status, received_data = transceive(cmd: CMD_FORMAT_CARD, calc_cmac: :both)
-
-      card_status == ST_SUCCESS
+      transceive(cmd: CMD_FORMAT_CARD, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def get_key_version(key_number)
-      card_status, received_data = transceive(cmd: CMD_GET_KEY_VERSION, data: key_number, calc_cmac: :both)
-
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
+      received_data = transceive(cmd: CMD_GET_KEY_VERSION, data: key_number, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
 
       received_data[0]
     end
 
     def change_key(key_number, new_key, curr_key)
       raise UnauthenticatedError unless @authed
+      raise UnexpectedDataError, 'Invalid key number' if key_number > 13
       
       cryptogram = new_key.key
 
@@ -320,13 +375,13 @@ module Mifare
 
       # AES stores key version separately
       if new_key.type == :aes
-        cryptogram << new_key.version
+        cryptogram.append_uint(new_key.version, 1)
       end
 
-      cryptogram.concat(crc32([CMD_CHANGE_KEY, key_number], cryptogram).reverse)
+      cryptogram.append_uint(crc32([CMD_CHANGE_KEY, key_number], cryptogram), 4)
 
       unless same_key
-        cryptogram.concat(crc32(new_key.key).reverse)
+        cryptogram.append_uint(crc32(new_key.key), 4)
       end
 
       # Encrypt cryptogram
@@ -335,23 +390,71 @@ module Mifare
       # Change current used key will revoke authentication
       invalid_auth if same_key
 
-      card_status, received_data = transceive(cmd: CMD_CHANGE_KEY, data: buffer, calc_cmac: :rx)
-
-      card_status == ST_SUCCESS
+      transceive(cmd: CMD_CHANGE_KEY, data: buffer, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def get_key_setting
-      card_status, received_data = transceive(cmd: CMD_GET_KEY_SETTING, calc_cmac: :both)
+      received_data = transceive(cmd: CMD_GET_KEY_SETTING, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
 
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
-
-      { key_setting: received_data[0],
+      { key_setting: KEY_SETTING.new.import(received_data[0]),
         key_count: received_data[1] & 0x0F,
         key_type: KEY_TYPE.key(received_data[1] & 0xF0) }
     end
 
-    def change_key_setting()
+    def change_key_setting(key_setting)
       raise UnauthenticatedError unless @authed
+
+      transceive(cmd: CMD_CHANGE_KEY_SETTING, data: key_setting.to_uint, tx: :encrypt, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def get_file_ids
+      transceive(cmd: CMD_GET_FILE_IDS, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def get_file_setting(id)
+      received_data = transceive(cmd: CMD_GET_FILE_SETTING, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+
+      file_setting = FILE_SETTING.new
+      file_setting[:type] = received_data.shift
+      file_setting[:encryption] = received_data.shift
+      file_setting[:permissions] = received_data.shift(2).to_uint
+
+      case FILE_TYPE.key(file_setting.file_type)
+      when :std_data_file, :backup_data_file
+        file_setting[:size] = received_data.shift(3).to_uint
+      when :value_file
+        file_setting[:lower_limit] = received_data.shift(4).to_uint
+        file_setting[:upper_limit] = received_data.shift(4).to_uint
+        file_setting[:limited_credit_value] = received_data.shift(4).to_uint
+        file_setting[:limited_credit] = received_data.shift == 0x01
+      when :linear_record_file, :cyclic_record_file
+        file_setting[:record_size] = received_data.shift(3).to_uint
+        file_setting[:max_record_number] = received_data.shift(3).to_uint
+        file_setting[:current_record_number] = received_data.shift(3).to_uint
+      end
+
+      file_setting
+    end
+
+    def create_std_data_file(id, file_setting)
+      buffer = [id]
+      buffer.append_uint(file_setting.encryption, 1)
+      buffer.append_uint(file_setting.permissions, 2)
+      buffer.append_uint(file_setting.size, 3)
+
+      transceive(cmd: CMD_CREATE_STD_DATA_FILE, data: buffer, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def delete_file(id)
+      transceive(cmd: CMD_DELETE_FILE, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def read_data_file(id, offset, length)
+      buffer = [id]
+      card_status, received_data = transceive(cmd: CMD_READ_DATA, data: buffer, tx: :cmac, rx: :cmac)
+    end
+
+    def write_data_file(id, offset, data)
       
     end
 
@@ -364,21 +467,16 @@ module Mifare
     end
 
     def convert_app_id(id)
-      if id.is_a?(Array)
-        raise UnexpectedDataError, 'Application ID overflow' if id.size > 3
+      raise UnexpectedDataError, 'Application ID overflow' if id < 0 || id >= (1 << 24)
 
-        (id[2] << 16) + (id[1] << 8) + id[0]
-      else
-        raise UnexpectedDataError, 'Application ID overflow' if id < 0 || id >= (1 << 24)
-
-        [(id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF].reverse
-      end
+      [].append_uint(id, 3)
     end
 
     def crc32(*datas)
       crc = 0xFFFFFFFF
 
       datas.each do |data|
+        data = [data] unless data.is_a? Array
         data.each do |byte|
           crc ^= byte
           8.times do
@@ -388,8 +486,7 @@ module Mifare
           end
         end
       end
-
-      [(crc >> 24) & 0xFF, (crc >> 16) & 0xFF, (crc >> 8) & 0xFF, crc & 0xFF]
+      crc
     end
 
     def check_status_code(code)
@@ -415,7 +512,7 @@ module Mifare
       when ST_APPL_INTEGRITY_ERROR
         'Unrecoverable error within application, application will be disabled.'
       when ST_AUTHENTICATION_ERROR
-        'Current authentication status does not allow the requested command.'
+        'Authentication error or insufficient privilege.'
       when ST_BOUNDARY_ERROR
         'Attempt to read/write data from/to beyond the file\'s/record\'s limits.'
       when ST_PICC_INTEGRITY_ERROR

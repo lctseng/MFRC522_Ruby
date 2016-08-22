@@ -12,9 +12,9 @@ class PICC
   def resume_communication
     if @pcd.reestablish_picc_communication(@uid)
       @halted = false
-      return true
+      true
     else
-      return false
+      false
     end
   end
 

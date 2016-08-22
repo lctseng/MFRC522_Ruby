@@ -3,6 +3,8 @@ require 'pi_piper'
 require 'openssl'
 require 'securerandom'
 
+require 'core_ext'
+
 require 'picc'
 require 'iso144434'
 require 'exceptions'
@@ -328,9 +330,14 @@ class MFRC522
     picc_halt
     picc_request(PICC_WUPA)
 
-    status, new_uid, _new_sak = picc_select
+    begin
+      new_uid, _new_sak = picc_select
+      status = true
+    rescue CommunicationError
+      status = false
+    end
 
-    status == :status_ok && uid == new_uid
+    status && uid == new_uid
   end
 
   # Lookup PICC name using sak
@@ -411,7 +418,7 @@ class MFRC522
     # Append CRC
     send_data = append_crc(send_data)
 
-    puts "Sending Data: #{send_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
+    puts "Sending Data: #{send_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}" if ENV['DEBUG']
 
     # Transfer data
     status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, send_data)
@@ -419,7 +426,7 @@ class MFRC522
     raise PICCTimeoutError if status == :status_picc_timeout
     raise CommunicationError, status if status != :status_ok
 
-    puts "Received Data: #{received_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}"
+    puts "Received Data: #{received_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}" if ENV['DEBUG']
 
     # Data exists, check CRC and return
     if received_data.size > 1
