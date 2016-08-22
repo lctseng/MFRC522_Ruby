@@ -212,7 +212,8 @@ module Mifare
           received_cmac = received_data.pop(8)
           @cmac_buffer.concat(received_data + [card_status])
           cmac = @session_key.calculate_cmac(@cmac_buffer)
-          if cmac != received_cmac
+          # Only first 8 bytes of CMAC are transmitted
+          if cmac[0..7] != received_cmac
             raise MismatchCMACError
           end
         end
@@ -304,10 +305,9 @@ module Mifare
     end
 
     def select_app(id)
-      invalid_auth
-
       transceive(cmd: CMD_SELECT_APP, data: convert_app_id(id), expect: ST_SUCCESS)
 
+      invalid_auth
       @selected_app = id
     end
 
@@ -357,7 +357,7 @@ module Mifare
       received_data[0]
     end
 
-    def change_key(key_number, new_key, curr_key)
+    def change_key(key_number, new_key, curr_key = nil)
       raise UnauthenticatedError unless @authed
       raise UnexpectedDataError, 'Invalid key number' if key_number > 13
       
@@ -411,22 +411,26 @@ module Mifare
       transceive(cmd: CMD_GET_FILE_IDS, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
+    def file_exist?(id)
+      get_file_ids.include?(id)
+    end
+
     def get_file_setting(id)
       received_data = transceive(cmd: CMD_GET_FILE_SETTING, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
 
       file_setting = FILE_SETTING.new
-      file_setting[:type] = received_data.shift
+      file_setting[:type] = FILE_TYPE.key(received_data.shift)
       file_setting[:encryption] = received_data.shift
       file_setting[:permissions] = received_data.shift(2).to_uint
 
-      case FILE_TYPE.key(file_setting.file_type)
+      case file_setting.type
       when :std_data_file, :backup_data_file
         file_setting[:size] = received_data.shift(3).to_uint
       when :value_file
         file_setting[:lower_limit] = received_data.shift(4).to_uint
         file_setting[:upper_limit] = received_data.shift(4).to_uint
         file_setting[:limited_credit_value] = received_data.shift(4).to_uint
-        file_setting[:limited_credit] = received_data.shift == 0x01
+        file_setting[:limited_credit] = received_data.shift & 0x01
       when :linear_record_file, :cyclic_record_file
         file_setting[:record_size] = received_data.shift(3).to_uint
         file_setting[:max_record_number] = received_data.shift(3).to_uint
@@ -436,13 +440,27 @@ module Mifare
       file_setting
     end
 
-    def create_std_data_file(id, file_setting)
+    def create_file(id, file_setting)
       buffer = [id]
       buffer.append_uint(file_setting.encryption, 1)
       buffer.append_uint(file_setting.permissions, 2)
-      buffer.append_uint(file_setting.size, 3)
 
-      transceive(cmd: CMD_CREATE_STD_DATA_FILE, data: buffer, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+      case file_setting.type
+      when :std_data_file, :backup_data_file
+        buffer.append_uint(file_setting.size, 3)
+      when :value_file
+        buffer.append_sint(file_setting.lower_limit, 4)
+        buffer.append_sint(file_setting.upper_limit, 4)
+        buffer.append_sint(file_setting.limited_credit_value, 4)
+        buffer.append_uint(file_setting.limited_credit, 1)
+      when :linear_record_file, :cyclic_record_file
+        buffer.append_uint(file_setting.record_size, 3)
+        buffer.append_uint(file_setting.max_record_number, 3)
+      end
+
+      cmd = self.class.const_get("CMD_CREATE_#{file_setting.type.to_s.upcase}")
+
+      transceive(cmd: cmd, data: buffer, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def delete_file(id)

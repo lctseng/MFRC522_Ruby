@@ -9,12 +9,12 @@ uid, sak = r.picc_select
 c = Mifare::DESFire.new(r, uid, sak)
 c.select
 
-picc_mk = Mifare::Key.new(:des, '0000000000000000')
+picc_mk = Mifare::Key.new(:des, '00'*8)
 
-des_default_key = Mifare::Key.new(:des, '0000000000000000')
-des2k_default_key = Mifare::Key.new(:des, '00000000000000000000000000000000')
-des3k_default_key = Mifare::Key.new(:des, '000000000000000000000000000000000000000000000000')
-aes_default_key = Mifare::Key.new(:aes, '00000000000000000000000000000000')
+des_default_key = Mifare::Key.new(:des, '00'*8)
+des2k_default_key = Mifare::Key.new(:des, '00'*16)
+des3k_default_key = Mifare::Key.new(:des, '00'*24)
+aes_default_key = Mifare::Key.new(:aes, '00'*16)
 
 default_key_setting = Mifare::DESFire::KEY_SETTING.new
 
@@ -28,8 +28,10 @@ app1_key0_1 = Mifare::Key.new(:des, SecureRandom.hex(8))
 app1_key1 = Mifare::Key.new(:des, SecureRandom.hex(8))
 app2_key0 = Mifare::Key.new(:des, SecureRandom.hex(16))
 app2_key0_1 = Mifare::Key.new(:des, SecureRandom.hex(16))
+app2_key1 = Mifare::Key.new(:des, SecureRandom.hex(16))
 app3_key0 = Mifare::Key.new(:des, SecureRandom.hex(24))
 app3_key0_1 = Mifare::Key.new(:des, SecureRandom.hex(24))
+app3_key1 = Mifare::Key.new(:des, SecureRandom.hex(24))
 app4_key0 = Mifare::Key.new(:aes, SecureRandom.hex(16))
 app4_key0_1 = Mifare::Key.new(:aes, SecureRandom.hex(16))
 app4_key1 = Mifare::Key.new(:aes, SecureRandom.hex(16))
@@ -116,17 +118,19 @@ else
   raise 'Unmatched key setting'
 end
 
-c.change_key(0, app1_key0, des_default_key)
+c.change_key(0, app1_key0)
 puts 'Change key from default to app1_key0 OK'
 
 c.auth(0, app1_key0)
 puts 'Re-auth OK'
 
-c.change_key(0, app1_key0_1, app1_key0)
+c.change_key(0, app1_key0_1)
 puts 'Change key from app1_key0 to app1_key0_1 OK'
 
 c.auth(0, app1_key0_1)
 puts 'Re-auth OK'
+
+puts "Get_Card_Version: #{c.get_card_version}"
 
 c.change_key(1, app1_key1, des_default_key)
 puts 'Change key 1 using key 0 OK'
@@ -138,16 +142,18 @@ puts 'Authenticate using key 1 OK'
 c.select_app(APP2_ID)
 puts "@@@@@Selected App2 OK@@@@@"
 
-c.auth(0, des2k_default_key)
+c.auth(0, des_default_key)
 puts "Authed with key:0 OK"
 
-c.change_key(0, app2_key0, des2k_default_key)
+c.change_key(0, app2_key0)
 puts 'Change key from default to app2_key0 OK'
 
 c.auth(0, app2_key0)
 puts 'Re-auth OK'
 
-c.change_key(0, app2_key0_1, app2_key0)
+puts "Get_Card_Version: #{c.get_card_version}"
+
+c.change_key(0, app2_key0_1)
 puts 'Change key from app2_key0 to app2_key0_1 OK'
 
 c.auth(0, app2_key0_1)
@@ -160,17 +166,25 @@ puts "@@@@@Selected App3 OK@@@@@"
 c.auth(0, des3k_default_key)
 puts "Authed with key:0 OK"
 
-c.change_key(0, app3_key0, des3k_default_key)
+c.change_key(0, app3_key0)
 puts 'Change key from default to app3_key0 OK'
 
 c.auth(0, app3_key0)
 puts 'Re-auth OK'
 
-c.change_key(0, app3_key0_1, app3_key0)
+c.change_key(0, app3_key0_1)
 puts 'Change key from app3_key0 to app3_key0_1 OK'
 
 c.auth(0, app3_key0_1)
 puts 'Re-auth OK'
+
+puts "Get_Card_Version: #{c.get_card_version}"
+
+c.change_key(1, app3_key1, des3k_default_key)
+puts 'Change key 1 using key 0 OK'
+
+c.auth(1, app3_key1)
+puts 'Authenticate using key 1 OK'
 
 ## App 4
 c.select_app(APP4_ID)
@@ -179,23 +193,30 @@ puts "@@@@@Selected App4 OK@@@@@"
 c.auth(0, aes_default_key)
 puts "Authed with key:0 OK"
 
-c.change_key(0, app4_key0, aes_default_key)
+c.change_key(0, app4_key0)
 puts 'Change key from default to app4_key0 OK'
 
 c.auth(0, app4_key0)
 puts 'Re-auth OK'
 
-c.change_key(0, app4_key0_1, app4_key0)
+c.change_key(0, app4_key0_1)
 puts 'Change key from app4_key0 to app4_key0_1 OK'
 
 c.auth(0, app4_key0_1)
 puts 'Re-auth OK'
+
+puts "Get_Card_Version: #{c.get_card_version}"
 
 c.change_key(1, app4_key1, aes_default_key)
 puts 'Change key 1 using key 0 OK'
 
 c.auth(1, app4_key1)
 puts 'Authenticate using key 1 OK'
+
+c.get_card_version
+
+## File test
+
 
 ## Finish test
 c.select_app(0)
