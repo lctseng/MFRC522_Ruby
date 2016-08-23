@@ -119,6 +119,14 @@ module Mifare
 
     # value 0x00 ~ 0x0D are key numbers, 0x0E grants free access, 0x0F always denies access
     FILE_PERMISSION = Struct.new(:read_access, :write_access, :read_write_access, :change_access) do
+      def import(byte)
+        self[:change_access] = byte & 0x0F
+        self[:read_write_access] = (byte >> 4) & 0x0F
+        self[:write_access] = (byte >> 8) & 0x0F
+        self[:read_access] = (byte >> 12) & 0x0F
+        self
+      end
+
       def to_uint
         (read_access << 12) | (write_access << 8) | (read_write_access << 4) | change_access
       end
@@ -127,9 +135,9 @@ module Mifare
     FILE_SETTING = Struct.new(
       :type,
       :encryption,
-      :permissions,
+      :permission,
       # Data file only
-      :size, # PICC will allocate n * 32 bytes memory internally
+      :size,
       # Value file only
       :lower_limit,
       :upper_limit,
@@ -154,6 +162,7 @@ module Mifare
       invalid_auth
       @cmac_buffer = []
       @selected_app = false
+      @inf_size_offset = 1 # DESFire preserve 1 byte less for underlying frame size
     end
 
     def authed?
@@ -165,7 +174,7 @@ module Mifare
       invalid_auth
     end
 
-    def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil)
+    def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil, return_data: nil, receive_all: nil)
       if (tx == :encrypt || rx == :encrypt) && !@authed
         raise UnauthenticatedError
       end
@@ -182,21 +191,29 @@ module Mifare
 
       buffer.concat(data)
 
-      if tx == :cmac && cmd != CMD_ADDITIONAL_FRAME && @authed
+      if (tx == :cmac || tx == :send_cmac) && cmd != CMD_ADDITIONAL_FRAME && @authed
         @cmac_buffer = buffer
         cmac = @session_key.calculate_cmac(@cmac_buffer)
+        buffer.concat(cmac[0..7]) if tx == :send_cmac
       end
 
-      received_data = super(buffer)
-      card_status = received_data.shift
+      received_data = []
+      card_status = nil
+      loop do
+        receive_buffer = super(buffer.shift(@max_inf_size))
 
-      if card_status != ST_SUCCESS && card_status != ST_ADDITIONAL_FRAME
-        invalid_auth
+        card_status = receive_buffer.shift
+        received_data.concat(receive_buffer)
+
+        break if card_status != ST_ADDITIONAL_FRAME || (buffer.empty? && !receive_all)
+
+        buffer.unshift(CMD_ADDITIONAL_FRAME)
       end
 
       error_msg = check_status_code(card_status)
 
       unless error_msg.empty?
+        invalid_auth
         raise ReceivedStatusError, "0x#{card_status.to_s(16).rjust(2, '0').upcase} - #{error_msg}"
       end
 
@@ -204,7 +221,7 @@ module Mifare
         raise UnexpectedDataError, 'Card status does not match expected value'
       end
 
-      if rx == :cmac && (card_status == ST_SUCCESS || card_status == ST_ADDITIONAL_FRAME) && @authed
+      if (rx == :cmac || rx == :send_cmac) && (card_status == ST_SUCCESS || card_status == ST_ADDITIONAL_FRAME) && @authed
         @cmac_buffer = [] if cmd != CMD_ADDITIONAL_FRAME
         @cmac_buffer.concat(received_data) if card_status == ST_ADDITIONAL_FRAME
 
@@ -224,10 +241,14 @@ module Mifare
       end
 
       if expect
-        return received_data
-      else
-        return card_status, received_data
+        if received_data.empty? && !return_data
+          return true
+        else
+          return received_data
+        end
       end
+
+      return card_status, received_data
     end
 
     def auth(key_number, auth_key)
@@ -279,20 +300,9 @@ module Mifare
     end
 
     def get_app_ids
-      ids = []
+      ids = transceive(cmd: CMD_GET_APP_IDS, tx: :cmac, rx: :cmac, expect: ST_SUCCESS, return_data: true, receive_all: true)
 
-      card_status, received_data = transceive(cmd: CMD_GET_APP_IDS, tx: :cmac, rx: :cmac)
-      ids.concat(received_data)
-
-      # 20 applications or above will need two frames
-      if card_status == ST_ADDITIONAL_FRAME
-        card_status, received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac)
-        ids.concat(received_data)
-      end
-
-      raise UnexpectedDataError, 'Incorrect response' if card_status != ST_SUCCESS
-
-      return ids if ids.size == 0
+      return ids if ids.empty?
 
       ids = ids.each_slice(3).to_a
       ids.map do |id|
@@ -327,16 +337,7 @@ module Mifare
     end
 
     def get_card_version
-      version = []
-
-      received_data = transceive(cmd: CMD_GET_CARD_VERSION, tx: :cmac, rx: :cmac, expect: ST_ADDITIONAL_FRAME)
-      version.concat(received_data)
-
-      received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac, expect: ST_ADDITIONAL_FRAME)
-      version.concat(received_data)
-
-      received_data = transceive(cmd: CMD_ADDITIONAL_FRAME, rx: :cmac, expect: ST_SUCCESS)
-      version.concat(received_data)
+      version = transceive(cmd: CMD_GET_CARD_VERSION, tx: :cmac, rx: :cmac, expect: ST_SUCCESS, receive_all: true)
 
       CARD_VERSION.new(
         version[0], version[1], version[2], version[3], version[4], 1 << (version[5] / 2), version[6],
@@ -408,7 +409,7 @@ module Mifare
     end
 
     def get_file_ids
-      transceive(cmd: CMD_GET_FILE_IDS, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+      transceive(cmd: CMD_GET_FILE_IDS, tx: :cmac, rx: :cmac, expect: ST_SUCCESS, return_data: true)
     end
 
     def file_exist?(id)
@@ -419,35 +420,51 @@ module Mifare
       received_data = transceive(cmd: CMD_GET_FILE_SETTING, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
 
       file_setting = FILE_SETTING.new
-      file_setting[:type] = FILE_TYPE.key(received_data.shift)
-      file_setting[:encryption] = received_data.shift
-      file_setting[:permissions] = received_data.shift(2).to_uint
+      file_setting.type = FILE_TYPE.key(received_data.shift)
+      file_setting.encryption = FILE_ENCRYPTION.key(received_data.shift)
+      file_setting.permission = FILE_PERMISSION.new.import(received_data.shift(2).to_uint)
 
       case file_setting.type
       when :std_data_file, :backup_data_file
-        file_setting[:size] = received_data.shift(3).to_uint
+        file_setting.size = received_data.shift(3).to_uint
       when :value_file
-        file_setting[:lower_limit] = received_data.shift(4).to_uint
-        file_setting[:upper_limit] = received_data.shift(4).to_uint
-        file_setting[:limited_credit_value] = received_data.shift(4).to_uint
-        file_setting[:limited_credit] = received_data.shift & 0x01
+        file_setting.lower_limit = received_data.shift(4).to_uint
+        file_setting.upper_limit = received_data.shift(4).to_uint
+        file_setting.limited_credit_value = received_data.shift(4).to_uint
+        file_setting.limited_credit = received_data.shift & 0x01
       when :linear_record_file, :cyclic_record_file
-        file_setting[:record_size] = received_data.shift(3).to_uint
-        file_setting[:max_record_number] = received_data.shift(3).to_uint
-        file_setting[:current_record_number] = received_data.shift(3).to_uint
+        file_setting.record_size = received_data.shift(3).to_uint
+        file_setting.max_record_number = received_data.shift(3).to_uint
+        file_setting.current_record_number = received_data.shift(3).to_uint
       end
 
       file_setting
     end
 
+    def change_file_setting(id, file_setting)
+      
+    end
+
+    def get_file_encryption(id)
+      file_setting = get_file_setting(id)
+      case file_setting.encryption
+      when :plain
+        :cmac
+      when :mac
+        :send_cmac
+      when :encrypt
+        :encrypt
+      end
+    end
+
     def create_file(id, file_setting)
       buffer = [id]
-      buffer.append_uint(file_setting.encryption, 1)
-      buffer.append_uint(file_setting.permissions, 2)
+      buffer.append_uint(FILE_ENCRYPTION[file_setting.encryption], 1)
+      buffer.append_uint(file_setting.permission.to_uint, 2)
 
       case file_setting.type
       when :std_data_file, :backup_data_file
-        buffer.append_uint(file_setting.size, 3)
+        buffer.append_uint(file_setting.size, 3) # PICC will allocate n * 32 bytes memory internally
       when :value_file
         buffer.append_sint(file_setting.lower_limit, 4)
         buffer.append_sint(file_setting.upper_limit, 4)
@@ -467,13 +484,76 @@ module Mifare
       transceive(cmd: CMD_DELETE_FILE, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
-    def read_data_file(id, offset, length)
-      buffer = [id]
-      card_status, received_data = transceive(cmd: CMD_READ_DATA, data: buffer, tx: :cmac, rx: :cmac)
+    def read_data(id, offset, length)
+      buffer = []
+      buffer.append_uint(id, 1)
+      buffer.append_uint(offset, 3)
+      buffer.append_uint(length, 3)
+
+      transceive(cmd: CMD_READ_DATA, data: buffer, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS, receive_all: true)
     end
 
-    def write_data_file(id, offset, data)
+    def write_data(id, offset, data)
+      data = data.dup
+
+      buffer = []
+      buffer.append_uint(id, 1)
+      buffer.append_uint(offset, 3)
+      buffer.append_uint(data.size, 3)
+
+      transceive(cmd: CMD_WRITE_DATA, plain_data: buffer, data: data, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def read_value(id)
+      received_data = transceive(cmd: CMD_GET_VALUE, data: id, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS)
+      received_data.to_sint
+    end
+
+    def credit_value(id, delta)
+      raise UnexpectedDataError, 'Negative number is not allowed.' if delta < 0
+
+      buffer = []
+      buffer.append_sint(delta, 4)
+
+      transceive(cmd: CMD_CREDIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def debit_value(id, delta)
+      raise UnexpectedDataError, 'Negative number is not allowed.' if delta < 0
+
+      buffer = []
+      buffer.append_sint(delta, 4)
+
+      transceive(cmd: CMD_DEBIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def limited_credit_value(id, delta)
+      raise UnexpectedDataError, 'Negative number is not allowed.' if delta < 0
+
+      buffer = []
+      buffer.append_sint(delta, 4)
+
+      transceive(cmd: CMD_LIMITED_CREDIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def read_record(id, offset, length)
       
+    end
+
+    def write_record
+      
+    end
+
+    def clear_record(id)
+      transceive(cmd: CMD_CLEAR_RECORD_FILE, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def commit_transaction
+      transceive(cmd: CMD_COMMIT_TRANSACTION, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
+    end
+
+    def abort_transaction
+      transceive(cmd: CMD_ABORT_TRANSACTION, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
     private
@@ -509,8 +589,10 @@ module Mifare
 
     def check_status_code(code)
       case code
-      when ST_SUCCESS, ST_NO_CHANGES, ST_ADDITIONAL_FRAME
+      when ST_SUCCESS, ST_ADDITIONAL_FRAME
         ''
+      when ST_NO_CHANGES
+        'No changes have been made, authenticate state revoked.'
       when ST_OUT_OF_MEMORY
         'Insufficient NV-Memory to complete command.'
       when ST_ILLEGAL_COMMAND

@@ -6,10 +6,9 @@ class CollisionError < CommunicationError; end
 
 class UnexpectedDataError < StandardError; end
 
-class ReceivedStatusError < StandardError; end
-
-class MismatchCMACError < StandardError; end
-
 class MifareNakError < StandardError; end
 
-class UnauthenticatedError < StandardError; end
+class DESFireError < StandardError; end
+class UnauthenticatedError < DESFireError; end
+class ReceivedStatusError < DESFireError; end
+class MismatchCMACError < DESFireError; end

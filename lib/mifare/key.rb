@@ -19,7 +19,9 @@ module Mifare
     def encrypt(data, cbc_mode = :send)
       @cipher.encrypt
 
-      # padding
+      length = data.size
+
+      # Add padding if not a complete block
       until data.size % @block_size == 0
         data << 0x00
       end
@@ -101,9 +103,12 @@ module Mifare
         @key = store_key_version(key, version)
 
         if @key_size == 8
+          # Store single DES key in 16 bytes
           @key += @key
           @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 16
+          # It's single DES if two keys are equal
+          @key_size = 8 if @key[0..7] == @key[8..15]
           @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 24
           @cipher_suite = 'des-ede3-cbc'

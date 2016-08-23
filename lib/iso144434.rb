@@ -18,6 +18,7 @@ class ISO144434 < PICC
     @support_nad = false
     @block_number = 0
     @selected = false
+    @inf_size_offset = 0
   end
 
   # ISO/IEC 14443-4 select
@@ -38,6 +39,8 @@ class ISO144434 < PICC
     @pcd.transceiver_baud_rate(:rx, ds)
 
     @block_number = 0
+    @max_frame_size = [64, @fsc].min
+    @max_inf_size = @max_frame_size - 5 + @inf_size_offset
     @selected = true
   end
 
@@ -57,7 +60,8 @@ class ISO144434 < PICC
   # Wrapper for handling ISO protocol
   def transceive(send_data)
     # Split data according to PICC's spec
-    chained_data = send_data.each_slice([64, @fsc].min - 5).to_a
+    send_data = [send_data] unless send_data.is_a? Array
+    chained_data = send_data.each_slice(@max_inf_size).to_a
     pcb = 0x02
 
     # Send chained data
