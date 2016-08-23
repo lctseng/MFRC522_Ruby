@@ -10,5 +10,5 @@ class MifareNakError < StandardError; end
 
 class DESFireError < StandardError; end
 class UnauthenticatedError < DESFireError; end
-class ReceivedStatusError < DESFireError; end
-class MismatchCMACError < DESFireError; end
+class ReceiptStatusError < DESFireError; end
+class ReceiptIntegrityError < DESFireError; end

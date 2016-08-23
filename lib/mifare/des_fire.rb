@@ -174,18 +174,26 @@ module Mifare
       invalid_auth
     end
 
-    def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil, return_data: nil, receive_all: nil)
+    def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil, return_data: nil, receive_all: nil, receive_length: nil)
+      # Need session key for encryption
       if (tx == :encrypt || rx == :encrypt) && !@authed
         raise UnauthenticatedError
       end
 
+      # Separate objects
+      plain_data = plain_data.dup
+      data = data.dup
+
+      # Be compatable with single byte input
       plain_data = [plain_data] unless plain_data.is_a? Array
       data = [data] unless data.is_a? Array
 
       buffer = [cmd] + plain_data
 
       if tx == :encrypt
+        # Calculate CRC on whole frame that we're going to send
         data.append_uint(crc32(buffer, data), 4)
+        # Encrypt partial frame only
         data = @session_key.encrypt(data)
       end
 
@@ -194,6 +202,7 @@ module Mifare
       if (tx == :cmac || tx == :send_cmac) && cmd != CMD_ADDITIONAL_FRAME && @authed
         @cmac_buffer = buffer
         cmac = @session_key.calculate_cmac(@cmac_buffer)
+        # Only first 8 bytes of CMAC are transmitted
         buffer.concat(cmac[0..7]) if tx == :send_cmac
       end
 
@@ -214,7 +223,7 @@ module Mifare
 
       unless error_msg.empty?
         invalid_auth
-        raise ReceivedStatusError, "0x#{card_status.to_s(16).rjust(2, '0').upcase} - #{error_msg}"
+        raise ReceiptStatusError, "0x#{card_status.to_s(16).rjust(2, '0').upcase} - #{error_msg}"
       end
 
       if expect && expect != card_status
@@ -231,13 +240,22 @@ module Mifare
           cmac = @session_key.calculate_cmac(@cmac_buffer)
           # Only first 8 bytes of CMAC are transmitted
           if cmac[0..7] != received_cmac
-            raise MismatchCMACError
+            raise ReceiptIntegrityError
           end
         end
       end
 
       if rx == :encrypt
+        if receive_length.nil?
+          raise UnexpectedDataError, 'Lack of receive length for removing padding'
+        end
         received_data = @session_key.decrypt(received_data)
+        received_data = remove_padding_bytes(received_data, receive_length)
+        received_crc = received_data.pop(4).to_uint
+        crc = crc32(received_data)
+        if crc != received_crc
+          raise ReceiptIntegrityError
+        end
       end
 
       if expect
@@ -484,29 +502,34 @@ module Mifare
       transceive(cmd: CMD_DELETE_FILE, data: id, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end
 
+    def read_file(id, cmd, data, length)
+      transceive(cmd: cmd, data: data, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS, receive_all: true, receive_length: length)
+    end
+
+    def write_file(id, cmd, plain_data, data)
+      transceive(cmd: cmd, plain_data: plain_data, data: data, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+    end
+
     def read_data(id, offset, length)
       buffer = []
       buffer.append_uint(id, 1)
       buffer.append_uint(offset, 3)
       buffer.append_uint(length, 3)
 
-      transceive(cmd: CMD_READ_DATA, data: buffer, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS, receive_all: true)
+      read_file(id, CMD_READ_DATA, buffer, length)
     end
 
     def write_data(id, offset, data)
-      data = data.dup
-
       buffer = []
       buffer.append_uint(id, 1)
       buffer.append_uint(offset, 3)
       buffer.append_uint(data.size, 3)
 
-      transceive(cmd: CMD_WRITE_DATA, plain_data: buffer, data: data, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+      write_file(id, CMD_WRITE_DATA, buffer, data)
     end
 
     def read_value(id)
-      received_data = transceive(cmd: CMD_GET_VALUE, data: id, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS)
-      received_data.to_sint
+      read_file(id, CMD_GET_VALUE, id, 4).to_sint
     end
 
     def credit_value(id, delta)
@@ -515,7 +538,7 @@ module Mifare
       buffer = []
       buffer.append_sint(delta, 4)
 
-      transceive(cmd: CMD_CREDIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+      write_file(id, CMD_CREDIT, id, buffer)
     end
 
     def debit_value(id, delta)
@@ -524,7 +547,7 @@ module Mifare
       buffer = []
       buffer.append_sint(delta, 4)
 
-      transceive(cmd: CMD_DEBIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+      write_file(id, CMD_DEBIT, id, buffer)
     end
 
     def limited_credit_value(id, delta)
@@ -533,15 +556,25 @@ module Mifare
       buffer = []
       buffer.append_sint(delta, 4)
 
-      transceive(cmd: CMD_LIMITED_CREDIT, plain_data: id, data: buffer, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+      write_file(id, CMD_LIMITED_CREDIT, id, buffer)
     end
 
-    def read_record(id, offset, length)
-      
+    def read_records(id, offset, length)
+      buffer = []
+      buffer.append_uint(id, 1)
+      buffer.append_uint(offset, 3)
+      buffer.append_uint(length, 3)
+
+      read_file(id, CMD_READ_RECORDS, buffer, length)
     end
 
-    def write_record
-      
+    def write_record(id, offset, data)
+      buffer = []
+      buffer.append_uint(id, 1)
+      buffer.append_uint(offset, 3)
+      buffer.append_uint(data.size, 3)
+
+      write_file(id, CMD_WRITE_RECORD, buffer, data)
     end
 
     def clear_record(id)
@@ -585,6 +618,18 @@ module Mifare
         end
       end
       crc
+    end
+
+    # Remove trailing padding bytes (ISO 9797-1)
+    def remove_padding_bytes(data, length)
+      if length == 0
+        str = data.pack('C*')
+        str.sub! /#{0x80.chr}#{0x00.chr}*\z/, ''
+        str.bytes
+      else
+        # Preserve CRC32 for checking
+        data[0...length + 4]
+      end
     end
 
     def check_status_code(code)
