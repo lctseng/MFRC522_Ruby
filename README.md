@@ -9,18 +9,25 @@ The code itself can be ported to other platform with little effort since it's pu
 Inspired by [miguelbalboa/rfid](https://github.com/miguelbalboa/rfid) and [Elmue/electronic RFID Door Lock](http://www.codeproject.com/Articles/1096861/DIY-electronic-RFID-Door-Lock-with-Battery-Backup).
 
 ##Installation
+
 You can install it by doing `gem install mfrc522` or using bundler.
 
 ##Documentation
+
 RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master/Mfrc522).
 
-##Project Status
-Author has confirmed that it works with Mifare Classic, Mifare Ultralight, and Mifare Ultralight C.
+##Supported RFID tags
 
-Support for Mifare Ultralight C 3DES authentication since gem version 0.2.0.
+The following models are fully supported and have been tested by the author:
 
-Mifare DESFire and Mifare Plus is not currently usable.
+*   Mifare Classic
+*   Mifare Ultralight
+*   Mifare Ultralight C
+*   Mifare DESFire EV1
 
 ##Get started
 
-Currently it's not safe to use this library since API changes very often.
+Check out files in folder `test` for example usage.
+
+You have to rescue exceptions yourself.
+

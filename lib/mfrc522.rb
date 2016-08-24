@@ -4,17 +4,16 @@ require 'openssl'
 require 'securerandom'
 
 require 'core_ext'
+require 'exceptions'
 
 require 'picc'
 require 'iso144434'
-require 'exceptions'
 
 require 'mifare/key'
 require 'mifare/classic'
 require 'mifare/ultralight'
 require 'mifare/ultralight_c'
 require 'mifare/des_fire'
-require 'mifare/plus'
 
 include PiPiper
 
