@@ -29,6 +29,10 @@ If the card model you want to use is not on the list, you can implement it on to
 
 The library provide basic access to ISO 14443-3 and ISO 14443-4 protocol, so it shouldn't be a problem.
 
+##Known issue
+
+I can't get my reader to work at baud rate higher than 106kBd, so the baud rate negotiation in ISO 14443-4 will be fixed to 106kBd until I found the workaround.
+
 ##Get started
 
 Check out files in folder `test` for example usage.
