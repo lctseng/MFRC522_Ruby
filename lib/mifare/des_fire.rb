@@ -174,21 +174,21 @@ module Mifare
     end
 
     def transceive(cmd: , plain_data: [], data: [], tx: nil, rx: nil, expect: nil, return_data: nil, receive_all: nil, receive_length: nil)
-      # Need session key for encryption
+      # Session key is needed for encryption
       if (tx == :encrypt || rx == :encrypt) && !@authed
         raise UnauthenticatedError
       end
 
-      # # Separate objects and be compatable with single byte input
+      # Separate objects and be compatable with single byte input
       plain_data = plain_data.is_a?(Array) ? plain_data.dup : [plain_data]
       data = data.is_a?(Array) ? data.dup : [data]
 
       buffer = [cmd] + plain_data
 
       if tx == :encrypt
-        # Calculate CRC on whole frame that we're going to send
+        # Calculate CRC on whole frame
         data.append_uint(crc32(buffer, data), 4)
-        # Encrypt partial frame only
+        # Encrypt data only
         data = @session_key.encrypt(data)
       end
 
@@ -271,6 +271,7 @@ module Mifare
       # Ask for authentication
       received_data = transceive(cmd: cmd, data: key_number, expect: ST_ADDITIONAL_FRAME)
 
+      # Receive challenge from DESFire
       challenge = auth_key.decrypt(received_data)
       challenge_rot = challenge.rotate
 
@@ -288,10 +289,10 @@ module Mifare
         halt
         @authed = false
 
-        raise UnexpectedDataError, 'Authentication Failed'
+        raise ReceiptIntegrityError, 'Authentication Failed'
       end
 
-      # Generate session key
+      # Generate session key from generated random number(RndA) and challenge(RndB)
       session_key = random_number[0..3] + challenge[0..3]
 
       if auth_key.key_size > 8
@@ -338,7 +339,7 @@ module Mifare
       raise UnauthenticatedError unless @authed
       raise UnexpectedDataError, 'An application can only hold up to 14 keys.' if key_count > 14
 
-      buffer = convert_app_id(id) + [key_setting.to_uint, key_count | KEY_TYPE[cipher_suite]]
+      buffer = convert_app_id(id) + [key_setting.to_uint, KEY_TYPE.fetch(cipher_suite) | key_count]
 
       transceive(cmd: CMD_CREATE_APP, data: buffer, tx: :cmac, rx: :cmac, expect: ST_SUCCESS)
     end

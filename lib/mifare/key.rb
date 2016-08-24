@@ -19,8 +19,6 @@ module Mifare
     def encrypt(data, cbc_mode = :send)
       @cipher.encrypt
 
-      length = data.size
-
       # Add padding if not a complete block
       until data.size % @block_size == 0
         data << 0x00
@@ -97,7 +95,7 @@ module Mifare
           raise UnexpectedDataError, 'Incorrect key length'
         end
 
-        # data block size for DES is 8 bytes
+        # Data block size for DES is 8 bytes
         @block_size = 8
 
         @key = store_key_version(key, version)
@@ -107,7 +105,7 @@ module Mifare
           @key += @key
           @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 16
-          # It's single DES if two keys are equal
+          # Downgrade to single DES if two keys are equal
           @key_size = 8 if @key[0..7] == @key[8..15]
           @cipher_suite = 'des-ede-cbc'
         elsif @key_size == 24
@@ -131,7 +129,7 @@ module Mifare
       @version = version
     end
 
-    # Store key version in LSB parity bit of DES key
+    # Store key version in parity bits(LSB of first 8 bytes) of DES key
     def store_key_version(key, version)
       mask = 0x80
       key.map.with_index do |key_byte, index|
@@ -145,16 +143,20 @@ module Mifare
     end
 
     def cbc_crypt(data, mode)
+      # Important!!!
+      # Set key and iv AFTER selecting encrypt or decrypt mode
       @cipher.key = @key
       @cipher.iv = @cipher_iv
-      data = data.pack('C*') # Convert byte array to binary
 
-      if mode == :send
+      # Convert byte array to binary
+      data = data.pack('C*')
+
+      if mode == :send # Save output data as IV
         output_data = @cipher.update(data) + @cipher.final
         @cipher_iv = output_data[-@block_size..-1]
 
         output_data.bytes
-      elsif mode == :receive
+      elsif mode == :receive # Save input data as IV
         @cipher_iv = data[-@block_size..-1]
         output_data = @cipher.update(data) + @cipher.final
 
@@ -164,10 +166,11 @@ module Mifare
       end
     end
 
+    # Shift single bit left across an array
     def bit_shift_left(data)
       data.map.with_index do |value, index|
         value = (value << 1) & 0xFF
-        if subsequent = data[index+1]
+        if subsequent = data[index + 1]
           value |= (subsequent >> 7) & 0x01
         end
         value

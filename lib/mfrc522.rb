@@ -101,7 +101,6 @@ class MFRC522
   TestDAC2Reg       = 0x3A  # defines the test value for TestDAC2
   TestADCReg        = 0x3B  # shows the value of ADC I and Q channels
 
-  # Constructor
   def initialize(nrstpd = 24, chip = 0, spd = 8000000, timer = 256)
     chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
                     1 => PiPiper::Spi::CHIP_SELECT_1,
@@ -118,7 +117,7 @@ class MFRC522
 
     soft_reset # Perform software reset
 
-    pcd_config_reset # default 256 ticks on 302us timer defines 77.33ms per timer cycle
+    pcd_config_reset # Set default setting
 
     antenna_on # Turn antenna on. They were disabled by the reset.
   end
@@ -192,7 +191,6 @@ class MFRC522
   end
 
   # Wakes PICC from HALT or IDLE to ACTIVE state
-  #
   # Accept PICC_REQA and PICC_WUPA command
   def picc_request(picc_command)
     pcd_config_reset
@@ -276,7 +274,7 @@ class MFRC522
 
         framing_bit = (tx_last_bits << 4) + tx_last_bits
 
-        # Try to fetch UID
+        # Select it
         status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, buffer, framing_bit)
 
         # Append received UID into buffer if not doing full select
@@ -293,7 +291,7 @@ class MFRC522
           collision_position = 32 if collision_position == 0 # Values 0-31, 0 means bit 32
           raise CollisionError if collision_position <= current_level_known_bits
         
-          # Mark the bit
+          # Mark the collision bit
           current_level_known_bits = collision_position
           uid_bit = (current_level_known_bits - 1) % 8
           uid_byte = (current_level_known_bits / 8) + (uid_bit != 0 ? 1 : 0)
@@ -307,16 +305,16 @@ class MFRC522
       end
 
       # We've finished current cascade level
-      # Check and collect all uid in this level
+      # Check and collect all uid stored in buffer
 
       # Append UID
       uid << buffer[2] if buffer[2] != PICC_CT
       uid << buffer[3] << buffer[4] << buffer[5]
 
       # Check the result of full select
-      # Select Acknowledge is 1 byte + CRC_A
-      raise IncorrectCRCError unless check_crc(received_data)
+      # Select Acknowledge is 1 byte + CRC16
       raise UnexpectedDataError, 'Unknown SAK format' if received_data.size != 3 || valid_bits != 0 
+      raise IncorrectCRCError unless check_crc(received_data)
 
       sak = received_data[0]
       break if (sak & 0x04) == 0 # No more cascade level
@@ -388,7 +386,7 @@ class MFRC522
     return :picc_unknown
   end
 
-  # Start encrypted Crypto1 communication between reader and Mifare PICC
+  # Start Crypto1 communication between reader and Mifare PICC
   #
   # PICC must be selected before calling for authentication
   # Remember to deauthenticate after communication, or no new communication can be made
@@ -408,14 +406,13 @@ class MFRC522
     (read_spi(Status2Reg) & 0x08) != 0
   end
 
-  # Stop Mifare encrypted communication
+  # Stop Crypto1 communication
   def mifare_crypto1_deauthenticate
     write_spi_clear_bitmask(Status2Reg, 0x08) # Clear MFCrypto1On bit
   end
 
-  # Helper that append CRC to buffer and check CRC or Mifare acknowledge
+  # Append CRC to buffer and check CRC or Mifare acknowledge
   def picc_transceive(send_data, accept_timeout = false)
-    # Append CRC
     send_data = append_crc(send_data)
 
     puts "Sending Data: #{send_data.map{|x|x.to_s(16).rjust(2,'0').upcase}}" if ENV['DEBUG']
@@ -472,13 +469,13 @@ class MFRC522
     end
   end
 
-  # Helper for setting bits by mask
+  # Set bits by mask
   def write_spi_set_bitmask(reg, mask)
     value = read_spi(reg)
     write_spi(reg, value | mask)
   end
 
-  # Helper for clearing bits by mask
+  # Clear bits by mask
   def write_spi_clear_bitmask(reg, mask)
     value = read_spi(reg)
     write_spi(reg, value & (~mask))
@@ -530,7 +527,6 @@ class MFRC522
     return status, received_data, valid_bits
   end
 
-  # Calculate CRC using MFRC522's built-in coprocessor
   def calculate_crc(data)
     write_spi(CommandReg, PCD_Idle)               # Stop any active command.
     write_spi(DivIrqReg, 0x04)                    # Clear the CRCIRq interrupt request bit
@@ -552,12 +548,10 @@ class MFRC522
     [read_spi(CRCResultRegL), read_spi(CRCResultRegH)]
   end
 
-  # Calculate and append CRC to data
   def append_crc(data)
     data + calculate_crc(data)
   end
 
-  # Check CRC using MFRC522's built-in coprocessor
   def check_crc(data)
     raise UnexpectedDataError, 'Data too short for CRC check' if data.size < 3
 

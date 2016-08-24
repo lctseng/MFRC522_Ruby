@@ -18,7 +18,6 @@ class ISO144434 < PICC
     @support_nad = false
     @block_number = 0
     @selected = false
-    @inf_size_offset = 0
   end
 
   # ISO/IEC 14443-4 select
@@ -61,16 +60,18 @@ class ISO144434 < PICC
 
   # Wrapper for handling ISO protocol
   def transceive(send_data)
-    # Split data according to PICC's spec
+    # Split data according to max buffer size
     send_data = [send_data] unless send_data.is_a? Array
     chained_data = send_data.each_slice(@max_inf_size).to_a
+
+    # Initialize I-block
     pcb = 0x02
 
     # Send chained data
     until chained_data.empty?
-      pcb &= 0xEF # reset chaining indicator
-      pcb |= 0x10 if chained_data.size > 1
-      pcb |= @block_number
+      pcb &= 0xEF # Reset chaining indicator
+      pcb |= 0x10 if chained_data.size > 1 # Set chaining
+      pcb |= @block_number # Set block number
       data = chained_data.shift
 
       buffer = [pcb] + data
@@ -79,11 +80,16 @@ class ISO144434 < PICC
       until finished
         received_data = handle_wtx(buffer)
 
+        # Retreive response pcb from data
         r_pcb = received_data[0]
 
-        # Check ACK
+        # Received ACK
         if r_pcb & 0xF6 == 0xA2
-          finished = true if (pcb & 0x01) == (r_pcb & 0x01)
+          # If ACK matches current block number means success
+          # Otherwise transmit it again
+          if (pcb & 0x01) == (r_pcb & 0x01)
+            finished = true
+          end
         else
           finished = true
         end
@@ -96,14 +102,14 @@ class ISO144434 < PICC
 
     # Receive chained data
     while r_pcb & 0x10 != 0
-      ack = 0xA2 | @block_number
-      received_data = handle_wtx([ack])
+      ack = 0xA2 | @block_number # Set block number
+      received_data = handle_wtx([ack]) # Send ACK to receive next frame
 
       r_pcb = received_data[0]
 
       received_chained_data << received_data
 
-      @block_number ^= 1
+      @block_number ^= 1 # toggle block number for next frame
     end
 
     # Collect INF from chain
@@ -132,6 +138,10 @@ class ISO144434 < PICC
   private
 
   def convert_iso_baud_rate_to_pcd_setting(value)
+    # ISO
+    # 0b000: 106kBd, 0b001: 212kBd, 0b010: 424kBd, 0b100: 848kBd
+    # MFRC522 register
+    # 0b000: 106kBd, 0b001: 212kBd, 0b010: 424kBd, 0b011: 848kBd
     x = (value >> 2) & 0x01
     y = (value >> 1) & 0x01
     z = value & 0x01
@@ -142,17 +152,19 @@ class ISO144434 < PICC
   # Gether information from ATS (Answer to Select)
   def process_ats(ats)
     position = 1
-    t0 = ats[position]
-    fsci = t0 & 0x0F
-    y1 = (t0 >> 4) & 0x07
-    @fsc = FSCI_to_FSC[fsci]
-    dr = 0
+    t0 = ats[position] # Format byte
+
+    fsci = t0 & 0x0F # PICC buffer size integer
+    y1 = (t0 >> 4) & 0x07 # Optional frame(TA, TB, TC) indicator
+    @fsc = FSCI_to_FSC[fsci] # Convert buffer size integer to bytes
+    dr = 0 # default baud rate 106kBd
     ds = 0
 
-    # Set baud rate
+    # Frame: TA
     if y1 & 0x01 != 0
       position += 1
       ta = ats[position]
+
       dr = ta & 0x07 # PCD to PICC baud rate
       ds = (ta >> 4) & 0x07 # PICC to PCD baud rate
 
@@ -164,17 +176,19 @@ class ISO144434 < PICC
       ds = 0
     end
 
-    # Set timeout
+    # Frame: TB
     if y1 & 0x02 != 0
       position += 1
       tb = ats[position]
-      fwi = (tb >> 4) & 0x0F
-      sgfi = tb & 0x0F
 
+      fwi = (tb >> 4) & 0x0F # Frame wating integer
+      sgfi = tb & 0x0F # Start-up frame guard integer
+
+      # Convert integers to real time
       @fwt = (1 << fwi)
       sgft = (1 << sgfi)
 
-      # PICC requested frame waiting time
+      # Set frame waiting time
       @pcd.internal_timer(@fwt)
     end
 
@@ -187,7 +201,7 @@ class ISO144434 < PICC
       @support_nad = true if tc & 0x01 != 0
     end
 
-    # PICC requested guard time before going to next step
+    # Start-up guard time
     sleep 0.000302 * sgft
 
     return dr, ds

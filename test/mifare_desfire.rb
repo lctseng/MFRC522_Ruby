@@ -145,7 +145,7 @@ puts 'Authenticate using key 1 OK'
 c.select_app(APP2_ID)
 puts "@@@@@Selected App2 OK@@@@@"
 
-c.auth(0, des_default_key)
+c.auth(0, des2k_default_key)
 puts "Authed with key:0 OK"
 
 c.change_key(0, app2_key0)
@@ -513,6 +513,14 @@ data = SecureRandom.random_bytes(16).bytes
 data2 = SecureRandom.random_bytes(16).bytes
 c.write_record(3, 0, data)
 c.commit_transaction
+c.write_record(3, 0, data2)
+c.abort_transaction
+if c.read_records(3, 0, 1) == data
+  puts "Abort transaction test OK"
+else
+  raise "Abort transaction test Failed"
+end
+
 c.write_record(3, 0, data2)
 c.commit_transaction
 if c.read_records(3, 1, 1) == data && c.read_records(3, 0, 1) == data2
