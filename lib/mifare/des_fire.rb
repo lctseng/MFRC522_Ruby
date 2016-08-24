@@ -115,7 +115,7 @@ module Mifare
       linear_record_file: 0x03, cyclic_record_file: 0x04
     }
 
-    FILE_ENCRYPTION = {plain: 0x00, mac: 0x01, encrypt: 0x03}
+    FILE_COMMUNICATION = {plain: 0x00, mac: 0x01, encrypt: 0x03}
 
     # value 0x00 ~ 0x0D are key numbers, 0x0E grants free access, 0x0F always denies access
     FILE_PERMISSION = Struct.new(:read_access, :write_access, :read_write_access, :change_access) do
@@ -134,7 +134,7 @@ module Mifare
 
     FILE_SETTING = Struct.new(
       :type,
-      :encryption,
+      :communication,
       :permission,
       # Data file only
       :size,
@@ -381,7 +381,7 @@ module Mifare
       same_key = (key_number == @authed)
 
       # Only Master Key can change its key type
-      key_number |= KEY_TYPE[new_key.cipher_suite] if @selected_app == 0
+      key_number |= KEY_TYPE.fetch(new_key.cipher_suite) if @selected_app == 0
 
       # XOR new key if we're using different one
       unless same_key
@@ -435,7 +435,7 @@ module Mifare
 
       file_setting = FILE_SETTING.new
       file_setting.type = FILE_TYPE.key(received_data.shift)
-      file_setting.encryption = FILE_ENCRYPTION.key(received_data.shift)
+      file_setting.communication = FILE_COMMUNICATION.key(received_data.shift)
       file_setting.permission = FILE_PERMISSION.new.import(received_data.shift(2).to_uint)
 
       case file_setting.type
@@ -457,7 +457,7 @@ module Mifare
 
     def change_file_setting(id, file_setting)
       buffer = []
-      buffer.append_uint(FILE_ENCRYPTION[file_setting.encryption], 1)
+      buffer.append_uint(FILE_COMMUNICATION.fetch(file_setting.communication), 1)
       buffer.append_uint(file_setting.permission.to_uint, 2)
 
       transceive(cmd: CMD_CHANGE_FILE_SETTING, plain_data: id, data: buffer, tx: :encrypt, rx: :cmac, expect: ST_SUCCESS)
@@ -465,7 +465,7 @@ module Mifare
 
     def create_file(id, file_setting)
       buffer = [id]
-      buffer.append_uint(FILE_ENCRYPTION[file_setting.encryption], 1)
+      buffer.append_uint(FILE_COMMUNICATION.fetch(file_setting.communication), 1)
       buffer.append_uint(file_setting.permission.to_uint, 2)
 
       case file_setting.type
@@ -493,12 +493,12 @@ module Mifare
     def read_file(id, cmd, data, length)
       file_setting = get_file_setting(id)
       length *= file_setting.record_size if file_setting.record_size
-      transceive(cmd: cmd, data: data, tx: :cmac, rx: convert_file_encryption(file_setting.encryption), expect: ST_SUCCESS, receive_all: true, receive_length: length)
+      transceive(cmd: cmd, data: data, tx: :cmac, rx: convert_file_communication(file_setting.communication), expect: ST_SUCCESS, receive_all: true, receive_length: length)
     end
 
     def write_file(id, cmd, plain_data, data)
       file_setting = get_file_setting(id)
-      transceive(cmd: cmd, plain_data: plain_data, data: data, tx: convert_file_encryption(file_setting.encryption), rx: :cmac, expect: ST_SUCCESS)
+      transceive(cmd: cmd, plain_data: plain_data, data: data, tx: convert_file_communication(file_setting.communication), rx: :cmac, expect: ST_SUCCESS)
     end
 
     def read_data(id, offset, length)
@@ -624,8 +624,8 @@ module Mifare
       end
     end
 
-    def convert_file_encryption(encryption)
-      case encryption
+    def convert_file_communication(communication)
+      case communication
       when :plain
         :cmac
       when :mac

@@ -156,7 +156,7 @@ class ISO144434 < PICC
 
     fsci = t0 & 0x0F # PICC buffer size integer
     y1 = (t0 >> 4) & 0x07 # Optional frame(TA, TB, TC) indicator
-    @fsc = FSCI_to_FSC[fsci] # Convert buffer size integer to bytes
+    @fsc = FSCI_to_FSC.fetch(fsci) # Convert buffer size integer to bytes
     dr = 0 # default baud rate 106kBd
     ds = 0
 

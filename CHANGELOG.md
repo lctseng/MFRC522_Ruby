@@ -1,3 +1,7 @@
+## MFRC522 1.0.1 ##
+
+*   Rename `KEY_ENCRYPTION` to `KEY_COMMUNICATION` in `DESFire`
+
 ## MFRC522 1.0.0 ##
 
 *   Use exception on error handling at higher level of abstraction.

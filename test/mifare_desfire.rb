@@ -105,7 +105,7 @@ else
 end
 
 key_setting = app_key_setting[:key_setting]
-key_setting[:create_delete_without_mk] = false
+key_setting.create_delete_without_mk = false
 puts 'Remove create_delete_without_mk from key setting'
 
 c.change_key_setting(key_setting)
@@ -243,7 +243,7 @@ c.auth(0, app1_key0_1)
 puts "Authed with key:0 OK"
 
 file_setting.type = :std_data_file
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.create_file(1, file_setting)
 puts "Created std_data_file with plain OK"
 
@@ -256,7 +256,7 @@ else
 end
 
 file_setting.type = :backup_data_file
-file_setting.encryption = :mac
+file_setting.communication = :mac
 c.create_file(2, file_setting)
 puts "Created backup_data_file with mac OK"
 
@@ -270,7 +270,7 @@ else
 end
 
 file_setting.type = :value_file
-file_setting.encryption = :encrypt
+file_setting.communication = :encrypt
 c.create_file(3, file_setting)
 puts "Created value_file with encrypt OK"
 
@@ -295,7 +295,7 @@ else
 end
 
 file_setting.type = :cyclic_record_file
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.create_file(4, file_setting)
 puts "Created cyclic_record_file with plain OK"
 
@@ -319,7 +319,7 @@ c.auth(0, app2_key0_1)
 puts "Authed with key:0 OK"
 
 file_setting.type = :std_data_file
-file_setting.encryption = :mac
+file_setting.communication = :mac
 c.create_file(1, file_setting)
 puts "Created std_data_file with mac OK"
 
@@ -332,7 +332,7 @@ else
 end
 
 file_setting.type = :backup_data_file
-file_setting.encryption = :encrypt
+file_setting.communication = :encrypt
 c.create_file(2, file_setting)
 puts "Created backup_data_file with encrypt OK"
 
@@ -346,7 +346,7 @@ else
 end
 
 file_setting.type = :linear_record_file
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.create_file(3, file_setting)
 puts "Created linear_record_file with plain OK"
 
@@ -363,7 +363,7 @@ else
 end
 
 file_setting.type = :cyclic_record_file
-file_setting.encryption = :mac
+file_setting.communication = :mac
 c.create_file(4, file_setting)
 puts "Created cyclic_record_file with mac OK"
 
@@ -387,7 +387,7 @@ c.auth(0, app3_key0_1)
 puts "Authed with key:0 OK"
 
 file_setting.type = :std_data_file
-file_setting.encryption = :encrypt
+file_setting.communication = :encrypt
 c.create_file(1, file_setting)
 puts "Created std_data_file with encrypt OK"
 
@@ -400,7 +400,7 @@ else
 end
 
 file_setting.type = :value_file
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.create_file(2, file_setting)
 puts "Created value_file with plain OK"
 
@@ -425,7 +425,7 @@ else
 end
 
 file_setting.type = :linear_record_file
-file_setting.encryption = :mac
+file_setting.communication = :mac
 c.create_file(3, file_setting)
 puts "Created linear_record_file with mac OK"
 
@@ -442,7 +442,7 @@ else
 end
 
 file_setting.type = :cyclic_record_file
-file_setting.encryption = :encrypt
+file_setting.communication = :encrypt
 c.create_file(4, file_setting)
 puts "Created cyclic_record_file with encrypt OK"
 
@@ -466,7 +466,7 @@ c.auth(0, app4_key0_1)
 puts "Authed with key:0 OK"
 
 file_setting.type = :backup_data_file
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.create_file(1, file_setting)
 puts "Created backup_data_file with plain OK"
 
@@ -480,7 +480,7 @@ else
 end
 
 file_setting.type = :value_file
-file_setting.encryption = :mac
+file_setting.communication = :mac
 c.create_file(2, file_setting)
 puts "Created value_file with mac OK"
 
@@ -505,7 +505,7 @@ else
 end
 
 file_setting.type = :linear_record_file
-file_setting.encryption = :encrypt
+file_setting.communication = :encrypt
 c.create_file(3, file_setting)
 puts "Created linear_record_file with encrypt OK"
 
@@ -529,9 +529,9 @@ else
   raise "Read-Write test Failed"
 end
 
-file_setting.encryption = :plain
+file_setting.communication = :plain
 c.change_file_setting(3, file_setting)
-if c.get_file_setting(3).encryption == :plain
+if c.get_file_setting(3).communication == :plain
   puts "Change file setting test OK"
 else
   raise "Change file setting test Failed"
