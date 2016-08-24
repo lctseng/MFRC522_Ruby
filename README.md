@@ -31,7 +31,7 @@ The library provide basic access to ISO 14443-3 and ISO 14443-4 protocol, so it 
 
 ##Known issue
 
-I can't get my reader to work at baud rate higher than 106kBd, so the baud rate negotiation in ISO 14443-4 will be fixed to 106kBd until I found the workaround.
+I can't get my reader to work at baud rate higher than 106kBd, so the baud rate negotiation in ISO 14443-4 will be fixed to 106kBd until I find the workaround.
 
 ##Get started
 
