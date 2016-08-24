@@ -40,7 +40,9 @@ class ISO144434 < PICC
 
     @block_number = 0
     @max_frame_size = [64, @fsc].min
-    @max_inf_size = @max_frame_size - 5 + @inf_size_offset
+    @max_inf_size = @max_frame_size - 3 # PCB + CRC16
+    @max_inf_size -= 1 if @support_cid
+    @max_inf_size -= 1 if @support_nad
     @selected = true
   end
 

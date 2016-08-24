@@ -162,7 +162,6 @@ module Mifare
       invalid_auth
       @cmac_buffer = []
       @selected_app = false
-      @inf_size_offset = 1 # DESFire preserve 1 byte less for underlying frame size
     end
 
     def authed?
@@ -180,13 +179,9 @@ module Mifare
         raise UnauthenticatedError
       end
 
-      # Separate objects
-      plain_data = plain_data.dup
-      data = data.dup
-
-      # Be compatable with single byte input
-      plain_data = [plain_data] unless plain_data.is_a? Array
-      data = [data] unless data.is_a? Array
+      # # Separate objects and be compatable with single byte input
+      plain_data = plain_data.is_a?(Array) ? plain_data.dup : [plain_data]
+      data = data.is_a?(Array) ? data.dup : [data]
 
       buffer = [cmd] + plain_data
 
@@ -252,7 +247,7 @@ module Mifare
         received_data = @session_key.decrypt(received_data)
         received_data = remove_padding_bytes(received_data, receive_length)
         received_crc = received_data.pop(4).to_uint
-        crc = crc32(received_data)
+        crc = crc32(received_data, card_status)
         if crc != received_crc
           raise ReceiptIntegrityError
         end
@@ -460,19 +455,11 @@ module Mifare
     end
 
     def change_file_setting(id, file_setting)
-      
-    end
+      buffer = []
+      buffer.append_uint(FILE_ENCRYPTION[file_setting.encryption], 1)
+      buffer.append_uint(file_setting.permission.to_uint, 2)
 
-    def get_file_encryption(id)
-      file_setting = get_file_setting(id)
-      case file_setting.encryption
-      when :plain
-        :cmac
-      when :mac
-        :send_cmac
-      when :encrypt
-        :encrypt
-      end
+      transceive(cmd: CMD_CHANGE_FILE_SETTING, plain_data: id, data: buffer, tx: :encrypt, rx: :cmac, expect: ST_SUCCESS)
     end
 
     def create_file(id, file_setting)
@@ -503,11 +490,14 @@ module Mifare
     end
 
     def read_file(id, cmd, data, length)
-      transceive(cmd: cmd, data: data, tx: :cmac, rx: get_file_encryption(id), expect: ST_SUCCESS, receive_all: true, receive_length: length)
+      file_setting = get_file_setting(id)
+      length *= file_setting.record_size if file_setting.record_size
+      transceive(cmd: cmd, data: data, tx: :cmac, rx: convert_file_encryption(file_setting.encryption), expect: ST_SUCCESS, receive_all: true, receive_length: length)
     end
 
     def write_file(id, cmd, plain_data, data)
-      transceive(cmd: cmd, plain_data: plain_data, data: data, tx: get_file_encryption(id), rx: :cmac, expect: ST_SUCCESS)
+      file_setting = get_file_setting(id)
+      transceive(cmd: cmd, plain_data: plain_data, data: data, tx: convert_file_encryption(file_setting.encryption), rx: :cmac, expect: ST_SUCCESS)
     end
 
     def read_data(id, offset, length)
@@ -620,15 +610,27 @@ module Mifare
       crc
     end
 
-    # Remove trailing padding bytes (ISO 9797-1)
+    # Remove trailing padding bytes
     def remove_padding_bytes(data, length)
       if length == 0
+        # padding format according to ISO 9797-1
         str = data.pack('C*')
         str.sub! /#{0x80.chr}#{0x00.chr}*\z/, ''
         str.bytes
       else
-        # Preserve CRC32 for checking
+        # data length + 4 bytes CRC
         data[0...length + 4]
+      end
+    end
+
+    def convert_file_encryption(encryption)
+      case encryption
+      when :plain
+        :cmac
+      when :mac
+        :send_cmac
+      when :encrypt
+        :encrypt
       end
     end
 
