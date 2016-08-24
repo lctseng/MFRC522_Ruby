@@ -1,3 +1,11 @@
+## MFRC522 1.0.0 ##
+
+*   Use exception on error handling at higher level of abstraction.
+
+*   Add support for Mifare DESFire EV1.
+
+*   Add suuport for ISO 14443-4 protocol.
+
 ## MFRC522 0.2.0 ##
 
 *   Introduce PICC abstraction.

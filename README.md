@@ -14,7 +14,7 @@ You can install it by doing `gem install mfrc522` or using bundler.
 
 ##Documentation
 
-RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master/Mfrc522).
+RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master).
 
 ##Supported RFID tags
 
@@ -24,6 +24,10 @@ The following models are fully supported and have been tested by the author:
 *   Mifare Ultralight
 *   Mifare Ultralight C
 *   Mifare DESFire EV1
+
+If the card model you want to use is not on the list, you can implement it on top of the `PICC` or `ISO144434` class.
+
+The library provide basic access to ISO 14443-3 and ISO 14443-4 protocol, so it shouldn't be a problem.
 
 ##Get started
 
