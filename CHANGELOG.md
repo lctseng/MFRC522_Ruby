@@ -1,3 +1,7 @@
+## MFRC522 1.0.2 ##
+
+*   Improve error handling in `picc_select`
+
 ## MFRC522 1.0.1 ##
 
 *   Rename `KEY_ENCRYPTION` to `KEY_COMMUNICATION` in `DESFire`

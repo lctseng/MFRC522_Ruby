@@ -276,6 +276,10 @@ class MFRC522
         # Select it
         status, received_data, valid_bits = communicate_with_picc(PCD_Transceive, buffer, framing_bit)
 
+        if status != :status_ok && status != :status_collision
+          raise CommunicationError, status
+        end
+
         # Append received UID into buffer if not doing full select
         buffer = buffer[0...all_full_byte] + received_data[0..3] if current_level_known_bits < 32
 
@@ -295,11 +299,9 @@ class MFRC522
           uid_bit = (current_level_known_bits - 1) % 8
           uid_byte = (current_level_known_bits / 8) + (uid_bit != 0 ? 1 : 0)
           buffer[1 + uid_byte] |= (1 << uid_bit)
-        elsif status == :status_ok
+        else
           break if current_level_known_bits >= 32
           current_level_known_bits = 32 # We've already known all bits, loop again for a complete select
-        else
-          raise CommunicationError, status
         end 
       end
 
