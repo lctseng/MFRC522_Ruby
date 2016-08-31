@@ -276,15 +276,19 @@ class MFRC522
           raise CommunicationError, status
         end
 
+        if received_data.empty?
+          raise UnexpectedDataError, 'Received empty UID data'
+        end
+
         # Append received UID into buffer if not doing full select
         if current_level_known_bits < 32
-          if current_level_known_bits % 8 != 0
-            uid_bit = current_level_known_bits % 8
-            buffer[-1] &= (0xFF >> (8 - uid_bit))
+          # Check for last collision
+          if tx_last_bits != 0
+            buffer[-1] &= (0xFF >> (8 - tx_last_bits))
             buffer[-1] |= received_data.shift
           end
 
-          buffer.concat(received_data[0..3])
+          buffer = buffer[0...all_full_byte] + received_data
         end
 
         # Handle collision

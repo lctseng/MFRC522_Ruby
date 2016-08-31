@@ -1,4 +1,4 @@
-## MFRC522 1.0.3 ##
+## MFRC522 1.0.3 & 1.0.4 ##
 
 *   Enhance collision handling mechanism.
 
