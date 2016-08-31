@@ -1,3 +1,7 @@
+## MFRC522 1.0.3 ##
+
+*   Enhance collision handling mechanism.
+
 ## MFRC522 1.0.2 ##
 
 *   Improve error handling in `picc_select`

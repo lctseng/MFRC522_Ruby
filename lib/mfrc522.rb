@@ -249,14 +249,10 @@ class MFRC522
       received_data = []
       valid_bits = 0
 
-      loop do
+      # Maxmimum loop is defined in ISO spec
+      32.times do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
-          # ensure there's nothing weird in buffer
-          if buffer.size != 6 && !buffer.select{|b| !buffer.is_a?(Fixnum)}.empty?
-            current_level_known_bits = 0
-            buffer = [cascade_level]
-            next
-          end
+          buffer = buffer[0..5] if buffer.size != 6
 
           tx_last_bits = 0
           buffer[1] = 0x70 # NVB - We're sending full length byte[0..6]
@@ -281,7 +277,15 @@ class MFRC522
         end
 
         # Append received UID into buffer if not doing full select
-        buffer = buffer[0...all_full_byte] + received_data[0..3] if current_level_known_bits < 32
+        if current_level_known_bits < 32
+          if current_level_known_bits % 8 != 0
+            uid_bit = current_level_known_bits % 8
+            buffer[-1] &= (0xFF >> (8 - uid_bit))
+            buffer[-1] |= received_data.shift
+          end
+
+          buffer.concat(received_data[0..3])
+        end
 
         # Handle collision
         if status == :status_collision
@@ -294,11 +298,19 @@ class MFRC522
           collision_position = 32 if collision_position == 0 # Values 0-31, 0 means bit 32
           raise CollisionError if collision_position <= current_level_known_bits
         
-          # Mark the collision bit
+          # Calculate positioin
           current_level_known_bits = collision_position
-          uid_bit = (current_level_known_bits - 1) % 8
-          uid_byte = (current_level_known_bits / 8) + (uid_bit != 0 ? 1 : 0)
-          buffer[1 + uid_byte] |= (1 << uid_bit)
+          uid_bit = current_level_known_bits % 8
+          uid_byte = (current_level_known_bits + 7) / 8
+
+          # Mark the collision bit
+          buffer = buffer[0..(uid_byte + 1)]
+          if uid_bit == 0
+            buffer << 0x01
+          else
+            buffer[-1] &= (0xFF >> (8 - uid_bit))
+            buffer[-1] |= (1 << uid_bit)
+          end
         else
           break if current_level_known_bits >= 32
           current_level_known_bits = 32 # We've already known all bits, loop again for a complete select
