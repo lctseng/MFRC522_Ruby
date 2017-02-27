@@ -248,11 +248,32 @@ class MFRC522
       current_level_known_bits = 0
       received_data = []
       valid_bits = 0
+      timeout = true
 
-      # Maxmimum loop is defined in ISO spec
+      # Maxmimum loop count is defined in ISO spec
       32.times do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
-          buffer = buffer[0..5] if buffer.size != 6
+          # Validate buffer content against non-numeric classes and incorrect size
+          dirty_buffer = buffer.size != 6
+          dirty_buffer |= buffer.any? do |byte|
+            if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('2.4.0')
+              !byte.is_a?(Numeric)
+            else
+              !byte.is_a?(Fixnum)
+            end
+          end
+
+          # Retry reading UID when buffer is dirty, but don't reset loop count to prevent infinite loop
+          if dirty_buffer
+            # Reinitialize all variables
+            buffer = [cascade_level]
+            current_level_known_bits = 0
+            received_data = []
+            valid_bits = 0
+
+            # Continue to next loop
+            next
+          end
 
           tx_last_bits = 0
           buffer[1] = 0x70 # NVB - We're sending full length byte[0..6]
@@ -316,9 +337,17 @@ class MFRC522
             buffer[-1] |= (1 << uid_bit)
           end
         else
-          break if current_level_known_bits >= 32
+          if current_level_known_bits >= 32
+            timeout = false
+            break
+          end
           current_level_known_bits = 32 # We've already known all bits, loop again for a complete select
         end 
+      end
+
+      # Handle timeout after 32 loops
+      if timeout
+        raise UnexpectedDataError, 'Keep receiving incomplete UID until timeout'
       end
 
       # We've finished current cascade level
