@@ -255,7 +255,7 @@ class MFRC522
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
           # Validate buffer content against non-numeric classes and incorrect size
           dirty_buffer = buffer.size != 6
-          dirty_buffer |= buffer.any? do |byte|
+          dirty_buffer ||= buffer.any? do |byte|
             if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('2.4.0')
               !byte.is_a?(Numeric)
             else
