@@ -169,9 +169,11 @@ class ISO144434 < PICC
       ds = (ta >> 4) & 0x07 # PICC to PCD baud rate
 
       # Convert fastest baud rate to PCD setting
-      dr = convert_iso_baud_rate_to_pcd_setting(dr)
-      ds = convert_iso_baud_rate_to_pcd_setting(ds)
+      # dr = convert_iso_baud_rate_to_pcd_setting(dr)
+      # ds = convert_iso_baud_rate_to_pcd_setting(ds)
 
+      # FIXME: baud rate fixed to 106kBd
+      # until author can confirm negotiation works
       dr = 0
       ds = 0
     end

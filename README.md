@@ -2,7 +2,7 @@
 
 [![Gem Version](https://badge.fury.io/rb/mfrc522.svg)](https://badge.fury.io/rb/mfrc522)
 
-This project is aimed to provide easy access to MIFARE RFID tag using MFRC522 and Raspberry Pi.
+This project is aiming to provide easy access to MIFARE RFID tags using MFRC522 and Raspberry Pi.
 
 The code itself can be ported to other platform with little effort since it's purely written in Ruby.
 
@@ -15,6 +15,12 @@ You can install it by doing `gem install mfrc522` or using bundler.
 ##Documentation
 
 RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master).
+
+##Hardware
+
+This library assumes you have the reader connected to SPI0 CE0 on Raspberry Pi, and the NRSTPD(RST) pin is connected to BCM24.
+
+If not, adjust the parameters when calling MFRC522 initialize method.
 
 ##Supported RFID tags
 
