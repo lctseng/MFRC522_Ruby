@@ -8,21 +8,21 @@ The code itself can be ported to other platform with little effort since it's pu
 
 Inspired by [miguelbalboa/rfid](https://github.com/miguelbalboa/rfid) and [Elmue/electronic RFID Door Lock](http://www.codeproject.com/Articles/1096861/DIY-electronic-RFID-Door-Lock-with-Battery-Backup).
 
-##Installation
+## Installation
 
 You can install it by doing `gem install mfrc522` or using bundler.
 
-##Documentation
+## Documentation
 
 RDoc is available at [RubyDoc](http://www.rubydoc.info/github/atitan/MFRC522_Ruby/master).
 
-##Hardware
+## Hardware
 
 This library assumes you have the reader connected to SPI0 CE0 on Raspberry Pi, and the NRSTPD(RST) pin is connected to BCM24.
 
 If not, adjust the parameters when calling MFRC522 initialize method.
 
-##Supported RFID tags
+## Supported RFID tags
 
 The following models are fully supported and have been tested by the author:
 
@@ -35,11 +35,11 @@ If the card model you want to use is not on the list, you can implement it on to
 
 The library provide basic access to ISO 14443-3 and ISO 14443-4 protocol, so it shouldn't be a problem.
 
-##Known issue
+## Known issue
 
 I can't get my reader to work at baud rate higher than 106kBd, so the baud rate negotiation in ISO 14443-4 will be fixed to 106kBd until I find the workaround.
 
-##Get started
+## Get started
 
 Check out files in folder `test` for example usage.
 
