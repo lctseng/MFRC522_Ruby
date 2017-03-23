@@ -1,4 +1,8 @@
-## MFRC522 1.0.3 & 1.0.4 ##
+## MFRC522 1.0.5  ##
+
+*   Ensure buffer is valid before doing any transmission during `picc_select`.
+
+## MFRC522 1.0.3 & 1.0.4  ##
 
 *   Enhance collision handling mechanism.
 
