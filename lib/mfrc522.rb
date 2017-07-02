@@ -100,7 +100,7 @@ class MFRC522
   TestDAC2Reg       = 0x3A  # defines the test value for TestDAC2
   TestADCReg        = 0x3B  # shows the value of ADC I and Q channels
 
-  def initialize(nrstpd = 24, chip = 0, spd = 8000000, timer = 256)
+  def initialize(nrstpd = 24, chip = 0, spd = 1000000, timer = 256)
     chip_option = { 0 => PiPiper::Spi::CHIP_SELECT_0,
                     1 => PiPiper::Spi::CHIP_SELECT_1,
                     2 => PiPiper::Spi::CHIP_SELECT_BOTH,
@@ -254,6 +254,7 @@ class MFRC522
       32.times do
         if current_level_known_bits >= 32 # Prepare to do a complete select if we knew everything
           # Validate buffer content against non-numeric classes and incorrect size
+          buffer = buffer[0..5]
           dirty_buffer = buffer.size != 6
           dirty_buffer ||= buffer.any? do |byte|
             if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('2.4.0')
@@ -277,7 +278,7 @@ class MFRC522
 
           tx_last_bits = 0
           buffer[1] = 0x70 # NVB - We're sending full length byte[0..6]
-          buffer << (buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]) # Block Check Character
+          buffer[6] = (buffer[2] ^ buffer[3] ^ buffer[4] ^ buffer[5]) # Block Check Character
 
           # Append CRC to buffer
           buffer = append_crc(buffer)
@@ -286,6 +287,9 @@ class MFRC522
           uid_full_byte = current_level_known_bits / 8
           all_full_byte = 2 + uid_full_byte # length of SEL + NVB + UID
           buffer[1] = (all_full_byte << 4) + tx_last_bits # NVB
+
+          buffer_length = all_full_byte + (tx_last_bits > 0 ? 1 : 0)
+          buffer = buffer[0...buffer_length]
         end
 
         framing_bit = (tx_last_bits << 4) + tx_last_bits
@@ -305,11 +309,10 @@ class MFRC522
         if current_level_known_bits < 32
           # Check for last collision
           if tx_last_bits != 0
-            buffer[-1] &= (0xFF >> (8 - tx_last_bits))
             buffer[-1] |= received_data.shift
           end
 
-          buffer = buffer[0...all_full_byte] + received_data
+          buffer += received_data
         end
 
         # Handle collision
@@ -322,20 +325,13 @@ class MFRC522
           collision_position = collision & 0x1F
           collision_position = 32 if collision_position == 0 # Values 0-31, 0 means bit 32
           raise CollisionError if collision_position <= current_level_known_bits
-        
+
           # Calculate positioin
           current_level_known_bits = collision_position
-          uid_bit = current_level_known_bits % 8
-          uid_byte = (current_level_known_bits + 7) / 8
+          uid_bit = (current_level_known_bits - 1) % 8
 
           # Mark the collision bit
-          buffer = buffer[0..(uid_byte + 1)]
-          if uid_bit == 0
-            buffer << 0x01
-          else
-            buffer[-1] &= (0xFF >> (8 - uid_bit))
-            buffer[-1] |= (1 << uid_bit)
-          end
+          buffer[-1] |= (1 << uid_bit)
         else
           if current_level_known_bits >= 32
             timeout = false
