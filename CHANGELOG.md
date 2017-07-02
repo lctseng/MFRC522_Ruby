@@ -1,3 +1,9 @@
+## MFRC522 1.0.6  ##
+
+*   Fix broken dirty buffer detection in `picc_select`.
+*   Improve anti-collision algorithm.
+*   Lower default SPI clock to 1Mhz for better compatibility.
+
 ## MFRC522 1.0.5  ##
 
 *   Ensure buffer is valid before doing any transmission during `picc_select`.
