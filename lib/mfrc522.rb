@@ -110,6 +110,7 @@ class MFRC522
     @timer = timer
 
     # Power it up
+    @nrstpd = nrstpd
     nrstpd_pin = PiPiper::Pin.new(pin: nrstpd, direction: :out)
     nrstpd_pin.on
     sleep 1.0 / 20.0 # Wait 50ms
@@ -119,6 +120,15 @@ class MFRC522
     pcd_config_reset # Set default setting
 
     antenna_on # Turn antenna on. They were disabled by the reset.
+  end
+
+  # Shutdown
+  def shutdown
+    antenna_off
+    # TODO: handle other platform?
+    if PiPiper::Platform.driver == PiPiper::Bcm2835
+      PiPiper::Platform.driver.unexport_pin(@nrstpd)
+    end
   end
 
   # PCD software reset
