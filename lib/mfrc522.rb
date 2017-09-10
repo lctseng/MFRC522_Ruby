@@ -15,8 +15,6 @@ require 'mifare/ultralight'
 require 'mifare/ultralight_c'
 require 'mifare/des_fire'
 
-include PiPiper
-
 class MFRC522
 
   # PICC commands used by the PCD to manage communication with several PICCs (ISO 14443-3, Type A, section 6.4)
@@ -497,7 +495,7 @@ class MFRC522
     output = 0
     PiPiper::Spi.begin do |spi|
       spi.chip_select_active_low(true)
-      spi.bit_order Spi::MSBFIRST
+      spi.bit_order PiPiper::Spi::MSBFIRST
       spi.clock @spi_spd
 
       spi.chip_select(@spi_chip) do
@@ -512,7 +510,7 @@ class MFRC522
   def write_spi(reg, values)
     PiPiper::Spi.begin do |spi|
       spi.chip_select_active_low(true)
-      spi.bit_order Spi::MSBFIRST
+      spi.bit_order PiPiper::Spi::MSBFIRST
       spi.clock @spi_spd
 
       spi.chip_select(@spi_chip) do
